@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskBoard MVP</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/main.js" defer></script>
+    <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .card { transition: box-shadow 0.15s; }
+    .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    #ws-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .ws-connected { background: #22c55e; }
+    .ws-disconnected { background: #ef4444; }
+    dialog::backdrop { background: rgba(0,0,0,0.4); }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+<header class="bg-white shadow-sm px-6 py-3 flex items-center justify-between">
+  <h1 class="text-xl font-bold text-indigo-600">📋 TaskBoard MVP</h1>
+  <div class="flex items-center gap-4">
+    <!-- Login -->
+    <div id="login-area" class="flex gap-2">
+      <input id="username-input" type="text" placeholder="Your name"
+        class="border rounded px-3 py-1 text-sm" />
+      <button onclick="doLogin()"
+        class="bg-indigo-600 text-white px-3 py-1 rounded text-sm hover:bg-indigo-700">Login</button>
+    </div>
+    <div id="user-info" class="hidden text-sm text-gray-600">
+      Logged in as <span id="current-username" class="font-semibold"></span>
+    </div>
+    <!-- WS status -->
+    <div class="flex items-center gap-1 text-xs text-gray-500">
+      <button id="doLogout" onclick="doLogout()" 
+        class=" hidden text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300 transition-colors">
+        Logout
+      </button>
+      <span id="ws-dot" class="ws-disconnected"></span>
+      <span id="ws-label">Disconnected</span>
+    </div>
+  </div>
+</header>
+ 
+<main class="p-6">
+  <div class="flex gap-4 mb-4 items-center">
+    <h2 class="text-lg font-semibold text-gray-700">Board</h2>
+    <button onclick="openAddColumn()"
+      class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600">+ Column</button>
+  </div>
+ 
+  <!-- Online users -->
+  <div class="mb-4 flex gap-2 items-center text-sm text-gray-600">
+    <span class="font-medium">Online:</span>
+    <div id="online-users" class="flex gap-2"></div>
+  </div>
+ 
+  <!-- Columns -->
+  <div id="board" class="flex gap-4 overflow-x-auto pb-4"></div>
+</main>
+ 
+<!-- Event log -->
+<aside class="fixed bottom-0 right-0 w-80 bg-white border-t border-l shadow-lg">
+  <div class="flex justify-between items-center px-4 py-2 bg-gray-50 border-b">
+    <span class="text-sm font-semibold text-gray-700">Event Log</span>
+    <button onclick="clearLog()" class="text-xs text-gray-400 hover:text-gray-600">Clear</button>
+  </div>
+  <div id="event-log" class="overflow-y-auto text-xs font-mono p-2 space-y-1" style="max-height:180px;"></div>
+</aside>
+ 
+<!-- ── Modals ── -->
+ 
+<!-- Add Column -->
+<dialog id="modal-add-column" class="rounded-lg shadow-xl p-6 w-80">
+  <h3 class="font-semibold mb-3">New Column</h3>
+  <input id="new-col-name" type="text" placeholder="Column name"
+    class="border rounded w-full px-3 py-2 mb-3 text-sm" />
+  <div class="flex justify-end gap-2">
+    <button onclick="document.getElementById('modal-add-column').close()"
+      class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+    <button onclick="submitAddColumn()"
+      class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Create</button>
+  </div>
+</dialog>
+ 
+<!-- Add / Edit Card -->
+<dialog id="modal-card" class="rounded-lg shadow-xl p-6 w-96">
+  <h3 id="modal-card-title" class="font-semibold mb-3">New Card</h3>
+  <input type="hidden" id="card-edit-id" />
+  <input type="hidden" id="card-col-id" />
+  <label class="block text-sm text-gray-600 mb-1">Title</label>
+  <input id="card-title-input" type="text" maxlength="200"
+    class="border rounded w-full px-3 py-2 mb-3 text-sm" />
+  <label class="block text-sm text-gray-600 mb-1">Description</label>
+  <textarea id="card-desc-input" rows="3"
+    class="border rounded w-full px-3 py-2 mb-3 text-sm resize-none"></textarea>
+
+  <label class="block text-sm text-gray-600 mb-1">Assign To</label>
+  <select id="card-assign-select" class="border rounded w-full px-3 py-2 mb-3 text-sm">
+    <option value="">-- Unassigned --</option>
+  </select>
+
+  <div class="flex justify-end gap-2">
+    <button onclick="document.getElementById('modal-card').close()"
+      class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+    <button onclick="submitCard()"
+      class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Save</button>
+  </div>
+</dialog>
+ 
+<!-- Move Card -->
+<dialog id="modal-move" class="rounded-lg shadow-xl p-6 w-80">
+  <h3 class="font-semibold mb-3">Move Card</h3>
+  <input type="hidden" id="move-card-id" />
+  <label class="block text-sm text-gray-600 mb-1">Target Column</label>
+  <select id="move-col-select" class="border rounded w-full px-3 py-2 mb-3 text-sm"></select>
+  <label class="block text-sm text-gray-600 mb-1">Target Position</label>
+  <input id="move-pos-input" type="number" min="0" value="0"
+    class="border rounded w-full px-3 py-2 mb-3 text-sm" />
+  <div class="flex justify-end gap-2">
+    <button onclick="document.getElementById('modal-move').close()"
+      class="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Cancel</button>
+    <button onclick="submitMove()"
+      class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Move</button>
+  </div>
+</dialog>
+
+</body>
+</html>
