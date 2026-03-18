@@ -15,7 +15,7 @@ from app.exceptions import (
 from app.api_routes import columns, cards, users, events
 from app.router import router as ws_router
 from app.manager import manager
-from app.tasks import event_cleanup_task
+from app.tasks import event_cleanup_task, session_cleanup_task
  
 setup_logging()
 logger = get_logger("main")
@@ -26,28 +26,29 @@ async def lifespan(app: FastAPI):
     logger.info('Starting TaskBoard MVP')
     broadcast_task = asyncio.create_task(manager.broadcast_loop())
     cleanup_task = asyncio.create_task(event_cleanup_task())
+    sess_cleanup_task  = asyncio.create_task(session_cleanup_task())
 
     yield
 
     logger.info('Shutting down TaskBoard MVP')
     broadcast_task.cancel()
     cleanup_task.cancel()
+    sess_cleanup_task.cancel()
     try:
-        await asyncio.gather(broadcast_task, cleanup_task, return_exceptions=True)
+        await asyncio.gather(broadcast_task, cleanup_task, sess_cleanup_task, return_exceptions=True)
     except Exception:
         pass
 
 app = FastAPI(
     title='taskBoard MVP',
-    description='Async kanban board',
-    version='0.1.0',
+    description='Async kanban — REST + WebSocket + cookie sessions',
+    version='0.3.0',
     lifespan=lifespan
 )
 
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=settings.CORS_ORIGINS,
-    allow_origins=['*'],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taskboard
+      POSTGRES_PASSWORD: taskboard
+      POSTGRES_DB: taskboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://taskboard:taskboard@db:5432/taskboard
+      # [EDITED] CORS_ORIGINS теперь только localhost:8080 — один origin через nginx proxy
+      CORS_ORIGINS: "http://localhost:8080"
+      LOG_LEVEL: INFO
+      EVENT_CLEANUP_INTERVAL: 300
+      EVENT_MAX_AGE_SECONDS: 86400
+      SESSION_SECRET_KEY: "change-me-generate-with-secrets-token-hex-32"
+    # [EDITED] Бэкенд больше не публикует порт наружу — только через nginx
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./backend:/app
+      - ./frontend:/frontend
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      # [ADDED] nginx конфиг: проксируем /api/ и /ws на бэкенд
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

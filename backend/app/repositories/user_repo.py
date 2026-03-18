@@ -35,8 +35,8 @@ class UserRepository:
 
         return list(result.scalars().all())
     
-    async def create(self, username: str) -> str:
-        user = User(user_id = uuid.uuid4(), username=username, online=False)
+    async def create(self, username: str, password_hash: str | None = None) -> str:
+        user = User(user_id = uuid.uuid4(), username=username, online=False, password_hash=password_hash)
         self.session.add(user)
         await self.session.flush()
         await self.session.refresh(user)

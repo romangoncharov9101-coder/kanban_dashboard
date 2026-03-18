@@ -8,7 +8,7 @@ class EventRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, event: str, payload: dict, entity_id: str = None) -> Event:
+    async def create(self, event: str, payload: dict, entity_id: str | None = None) -> Event:
         ev = Event(
             id=uuid.uuid4(),
             event=event,

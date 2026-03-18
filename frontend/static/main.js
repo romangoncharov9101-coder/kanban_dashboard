@@ -236,13 +236,11 @@ console.log(isLocal, API, WS_BASE)
   }
  
   function renderCard(c) {
-    // 1. Ищем имена пользователей по ID
     const creator = allUsers.find(u => u.user_id === c.created_by)?.username || 'Unknown';
     const assignee = c.assigned_to 
         ? (allUsers.find(u => u.user_id === c.assigned_to)?.username || 'Unknown') 
         : 'Unassigned';
-
-    // 2. Логика даты: берем updated_at, если его нет — created_at
+        
     const displayDate = new Date(c.updated_at || c.created_at).toLocaleString([], {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
     });

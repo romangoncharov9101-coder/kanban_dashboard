@@ -24,10 +24,10 @@ class ColumnService:
         max_pos = await self.repo.get_max_position()
         col = await self.repo.create(name=data.name, position=max_pos + 1)
         out = ColumnOut.model_validate(col)
-        payload = out.model_validate(col)
+        payload = out.model_dump(mode='json')
 
-        json_compatible_payload = json.loads(payload.model_dump_json())
-        await self.event_repo.create('column_created', json_compatible_payload, str(col.id))
+        # json_compatible_payload = json.loads(payload.model_dump_json())
+        await self.event_repo.create('column_created', payload, str(col.id))
         await manager.publish('column_created', str(col.id), payload)
         logger.info(f'Column created: {col.id, col.name}')
         return out

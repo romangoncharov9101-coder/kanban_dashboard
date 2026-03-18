@@ -18,6 +18,7 @@ class ConnectionManager:
 
     def disconnect(self, ws: WebSocket) -> None:
         self._connections.pop(ws, None)
+        logger.info(f'WS disconnected — active connections: {len(self._connections)}')
 
     async def broadcast(self, message: dict) -> None:
         data = json.dumps(message, default=str)

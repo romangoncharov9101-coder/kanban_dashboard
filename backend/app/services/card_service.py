@@ -8,6 +8,7 @@ from app.repositories.user_repo import UserRepository
 from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut
 from app.manager import manager
 from app.core.logging import get_logger
+from datetime import datetime, timezone
 
 logger = get_logger('services.card')
 
@@ -70,7 +71,7 @@ class CardService:
             updates['description'] = None
  
         if data.assigned_to is not None:
-            user = await self.user_repo.get_by_id(data.assigned_to)
+            user = await self.user_repo.get_user_by_id(data.assigned_to)
             if not user:
                 raise HTTPException(status_code=404, detail='Assigned user not found')
             updates['assigned_to'] = data.assigned_to
@@ -166,7 +167,6 @@ class CardService:
             card.position = target_pos
             await self.session.flush()
 
-        from datetime import datetime, timezone
         card.updated_at = datetime.now(timezone.utc)
         await self.session.flush()
         await self.session.refresh(card)

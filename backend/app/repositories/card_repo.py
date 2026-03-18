@@ -14,7 +14,7 @@ class CardRepository:
             q = q.where(Card.column_id == column_id)
         if assigned_to:
             q = q.where(Card.assigned_to == assigned_to)
-        q.order_by(Card.column_id, Card.position)
+        q = q.order_by(Card.column_id, Card.position)
         result = await self.session.execute(q)
         return list(result.scalars().all())
     

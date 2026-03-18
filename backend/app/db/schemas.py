@@ -70,6 +70,11 @@ class ColumnOut(BaseModel):
 #======================================================
 class UserLoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1, max_length=128)
+
+class UserRegisterRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1, max_length=128)
 
 class UserOut(BaseModel):
     user_id: UUID
@@ -81,7 +86,14 @@ class UserOut(BaseModel):
 class UserLoginResponse(BaseModel):
     user_id: UUID
     username: str
-    token: str
+
+class cardDragEvent(BaseModel):
+    card_id: UUID
+    dragged_by: UUID
+    username: str
+    source_column_id: UUID
+    current_column_id: UUID
+    current_position: int
 
 class WSMessage(BaseModel):
     event: str

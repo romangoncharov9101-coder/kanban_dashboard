@@ -41,7 +41,8 @@ class ColumnRepository:
 
     async def update(self, column: Column, **kwargs) -> Column:
         for k, v in kwargs.items():
-            setattr(column, k, v)
+            if v is not None:
+                setattr(column, k, v)
         await self.session.flush()
         await self.session.refresh(column)
         return column

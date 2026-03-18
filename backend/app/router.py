@@ -1,8 +1,10 @@
 import uuid
 import asyncio
+import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.manager import manager
 from app.core.logging import get_logger
+from app.core.deps import get_current_user_ws
 from app.db.session import AsyncSessionLocale
 from app.repositories.user_repo import UserRepository
 
@@ -14,34 +16,54 @@ async def websocke_enpoint(
     ws:WebSocket,
     user_id: str | None = Query(default=None),
 ):
+    user = await get_current_user_ws(ws)
     await manager.connect(ws)
-    user = None
 
-    if user_id:
+    if user:
         async with AsyncSessionLocale() as session:
             try: 
                 repo = UserRepository(session)
-                user = await repo.get_user_by_id(uuid.UUID(user_id))
-                if user:
-                    await repo.set_online(user, True)
+                u = await repo.get_user_by_id(user.user_id)
+                if u:
+                    await repo.set_online(u, True)
                     await session.commit()
                     await manager.publish(
                         'user_online',
-                        str(user.user_id),
-                        {'user_id': str(user.user_id), 'username': user.username},
+                        str(u.user_id),
+                        {'user_id': str(u.user_id), 'username': u.username},
                     )
             except Exception as exc:
-                logger.warning(f'Could not set user onlime: {exc}', exc)
+                logger.warning(f'Could not set user onlime: {exc}')
 
     sender_task = asyncio.create_task(manager.sender_loop(ws))
 
     try:
         while True:
-            await ws.receive_text()
+            raw = await ws.receive_text()
+            if not raw:
+                continue
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            if msg.get('event') == 'card_dragging' and user:
+                await manager.publish(
+                    'card_dragging',
+                    msg.get('card_id'),
+                    {
+                        'card_id': msg.get('card_id'),
+                        'dragged_by': str(user.user_id),
+                        'username': user.username,
+                        'source_column_id': msg.get('source_column_id'),
+                        'current_column_id': msg.get('current_column_id'),
+                        'current_position': msg.get('current_position', 0),
+                    }
+                )
     except WebSocketDisconnect:
-        logger.info(f'WebSocket client disconnected (user_id={user_id})')
+        logger.info(f'WS disconnected (user={user.username if user else "anon"})',)
     except Exception as exc:
-        logger.warning(f'WebSocket error: {exc}')
+        logger.warning(f'WS error: {exc}')
     finally:
         manager.disconnect(ws)
         sender_task.cancel()
@@ -50,11 +72,11 @@ async def websocke_enpoint(
         except asyncio.CancelledError:
             pass
 
-        if user_id:
+        if user:
             async with AsyncSessionLocale() as session:
                 try:
                     repo = UserRepository(session)
-                    u = await repo.get_user_by_id(uuid.UUID(user_id))
+                    u = await repo.get_user_by_id(user.user_id)
                     if u:
                         await repo.set_online(u, False)
                         await session.commit()
@@ -64,4 +86,4 @@ async def websocke_enpoint(
                             {'user_id': str(u.user_id), 'username': u.username}
                         )
                 except Exception as exc:
-                    logger.warning(f'Could not set user ofline: {exc}')
+                    logger.warning(f'Could not set user offline: {exc}')
