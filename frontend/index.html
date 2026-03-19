@@ -33,10 +33,10 @@
     <div id="auth-area" class="flex items-center gap-2">
       <input id="auth-username" type="text" placeholder="Username"
         class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" />
+        onkeydown="if(event.key==='Enter') doLogin()" maxlength="100"/>
       <input id="auth-password" type="password" placeholder="Password"
         class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" />
+        onkeydown="if(event.key==='Enter') doLogin()" maxlength="108"/>
       <button onclick="doLogin()"
         class="bg-indigo-600 text-white px-3 py-1.5 rounded text-sm hover:bg-indigo-700">Login</button>
       <button onclick="doRegister()"
@@ -76,7 +76,7 @@
   <h3 class="font-semibold mb-3">New Column</h3>
   <input id="new-col-name" type="text" placeholder="Column name"
     class="border rounded w-full px-3 py-2 mb-3 text-sm"
-    onkeydown="if(event.key==='Enter') submitAddColumn()" />
+    onkeydown="if(event.key==='Enter') submitAddColumn()" maxlength="100"/>
   <div class="flex justify-end gap-2">
     <button onclick="document.getElementById('modal-add-column').close()"
       class="px-3 py-1 text-sm text-gray-500">Cancel</button>
@@ -92,10 +92,10 @@
   <label class="block text-sm text-gray-600 mb-1">Title</label>
   <input id="card-title-input" type="text" maxlength="200"
     class="border rounded w-full px-3 py-2 mb-3 text-sm"
-    onkeydown="if(event.key==='Enter') submitCard()" />
+    onkeydown="if(event.key==='Enter') submitCard()" maxlength="100"/>
   <label class="block text-sm text-gray-600 mb-1">Description</label>
   <textarea id="card-desc-input" rows="3"
-    class="border rounded w-full px-3 py-2 mb-3 text-sm resize-none"></textarea>
+    class="border rounded w-full px-3 py-2 mb-3 text-sm resize-none" maxlength="400"></textarea>
   <div class="flex justify-end gap-2">
     <button onclick="document.getElementById('modal-card').close()"
       class="px-3 py-1 text-sm text-gray-500">Cancel</button>

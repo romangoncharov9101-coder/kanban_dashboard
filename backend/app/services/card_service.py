@@ -90,12 +90,13 @@ class CardService:
         card = await self.repo.update(card, **updates)
  
         if event_type == 'card_moved':
-            await self.repo.normalize_positions_in_column(original_column_id)
+            await self.repo.normalize_position_in_column(original_column_id)
  
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
         await self.event_repo.create(event_type, payload, str(card.id))
         await manager.publish(event_type, str(card.id), payload)
+        
         logger.info(f"Card {event_type, card.id}")
         return out
 

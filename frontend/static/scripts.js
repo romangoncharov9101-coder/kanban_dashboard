@@ -13,6 +13,7 @@ const remoteDrags = new Map();
 let boardSortable = null;
 const cardSortables = new Map();
 let allUsers = [];
+let isUiLocked = false;
 
 // ── API -----------------------------------------------------------------------
 // COOKIE: credentials:'include' — браузер отправляет HttpOnly cookie автоматически.
@@ -25,7 +26,7 @@ async function api(method, path, body) {
   const json = await res.json();
   if (!res.ok) {
     if (res.status === 401) _uiLoggedOut();
-    throw new Error(json?.error?.message || res.statusText);
+    return null;
   }
   return json;
 }
@@ -53,7 +54,8 @@ async function doRegister() {
     // COOKIE: сервер отвечает Set-Cookie: session=...; HttpOnly; SameSite=Lax
     const d = await api('POST','/users/register',{username:u,password:p});
     currentUser = {user_id:d.user_id, username:d.username};
-    _uiLoggedIn(); logEvent('user_online',`Registered as ${u}`);
+    _uiLoggedIn();await loadBoard();await loadAllUsers();await loadOnlineUsers();
+    logEvent('user_online',`Registered as ${u}`);
   } catch(e) { alert('Register failed: '+e.message); }
 }
 
@@ -64,13 +66,38 @@ async function doLogin() {
   try {
     const d = await api('POST','/users/login',{username:u,password:p});
     currentUser = {user_id:d.user_id, username:d.username};
-    _uiLoggedIn(); logEvent('user_online',`Logged in as ${u}`);
+    _uiLoggedIn();await loadBoard();await loadAllUsers();await loadOnlineUsers();
+    logEvent('user_online',`Logged in as ${u}`);
   } catch(e) { alert('Login failed: '+e.message); }
 }
 
 async function doLogout() {
-  try { await api('POST','/users/logout'); } catch(_){}
-  currentUser = null; _uiLoggedOut(); connectWS();
+  try {
+    await api('POST', '/users/logout');
+  } catch (e) {
+    console.error("Logout API failed", e);
+  } finally {
+    currentUser = null;
+    columns = [];
+    cards = [];
+    allUsers = [];
+    onlineUsers = [];
+
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    const boardEl = document.getElementById('board');
+    if (boardEl) boardEl.innerHTML = '';
+    
+    const onlineListEl = document.getElementById('online-users');
+    if (onlineListEl) onlineListEl.innerHTML = '';
+
+    // 4. Показываем форму входа
+    _uiLoggedOut();
+    
+    logEvent('system', 'Logged out and data cleared');
+  }
 }
 
 function _uiLoggedIn() {
@@ -104,10 +131,27 @@ function connectWS() {
     let msg; try { msg=JSON.parse(e.data); } catch { return; }
     if (msg.event==='card_dragging') { _handleRemoteDrag(msg.payload); return; }
     logEvent(msg.event, JSON.stringify(msg.payload));
+    if (isUiLocked) return;
     switch(msg.event) {
-      case 'column_created': case 'column_updated': case 'column_deleted': await loadBoard(); break;
-      case 'card_created': case 'card_updated': case 'card_moved': case 'card_deleted': await loadCards(); renderBoard(); break;
-      case 'user_online': case 'user_offline': await loadAllUsers(); await loadOnlineUsers(); break;
+      case 'column_created': 
+      case 'column_updated': 
+      case 'column_deleted': 
+        await loadBoard(); 
+        break;
+      case 'card_created': 
+      case 'card_updated': 
+      case 'card_moved': 
+      case 'card_deleted': 
+        await loadOnlineUsers(); 
+        await loadCards(); 
+        renderBoard(); 
+        break;
+      case 'user_online': 
+      case 'user_offline': 
+        await loadAllUsers(); 
+        await loadOnlineUsers(); 
+        renderBoard(); 
+        break;
     }
   };
 }
@@ -132,12 +176,22 @@ function _sendDragEvent(cardId,srcColId,curColId,curPos) {
 
 // ── Data ----------------------------------------------------------------------
 async function loadBoard() {
-  [cols,cards,usrs] = await Promise.all([api('GET','/columns'),api('GET','/cards'),api('GET', '/users')]);
-  columns = cols;
-  cards = cards;
-  allUsers = usrs;
-  loadAllUsers();
-  renderBoard();
+  try {
+    const [cols, crds, usrs] = await Promise.all([
+      api('GET', '/columns'),
+      api('GET', '/cards'),
+      api('GET', '/users')
+    ]);
+    
+    columns = cols;
+    cards = crds;
+    allUsers = usrs;
+    
+    if (typeof updateAssigneeSelect === 'function') updateAssigneeSelect();
+    renderBoard();
+  } catch (e) {
+    console.error("Board load failed", e);
+  }
 }
 
 async function loadCards() { cards = await api('GET','/cards'); }
@@ -150,15 +204,20 @@ async function loadOnlineUsers() {
 
 async function loadAllUsers() {
     try {
-      const users = await api('GET', '/users');
-      const select = document.getElementById('card-assign-select')
+        const users = await api('GET', '/users');
+        allUsers = users;
+        const select = document.getElementById('card-assign-select');
+        if (!select) return;
 
-      select.innerHTML = '<option value="">-- Unassigned --</option>' + 
-            users.map(u => `<option value="${u.user_id}">${esc(u.username)}</option>`).join('');
+        // ТОЧЕЧНОЕ ИСПРАВЛЕНИЕ: фильтруем currentUser
+        const otherUsers = users.filter(u => u.user_id !== currentUser?.user_id);
+
+        select.innerHTML = '<option value="">-- Unassigned --</option>' + 
+            otherUsers.map(u => `<option value="${u.user_id}">${esc(u.username)}</option>`).join('');
     } catch (e) {
-      console.error('Failed to load users for select', e)
+        console.error('Failed to load users for select', e);
     }
-  }
+}
 
 // ── Render --------------------------------------------------------------------
 function renderBoard() {
@@ -197,20 +256,21 @@ function _renderColumn(col, colCards) {
 }
 
 function _renderCard(c) {
-  console.log(allUsers)
   const creator = allUsers.find(u => u.user_id === c.created_by)?.username || 'Unknown';
     const assignee = c.assigned_to 
         ? (allUsers.find(u => u.user_id === c.assigned_to)?.username || 'Unknown') 
         : 'Unassigned';
-
-    console.log(assignee)
         
     const displayDate = new Date(c.updated_at || c.created_at).toLocaleString([], {
         day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
     });
 
     return `
-      <div class="card bg-gray-50 border rounded-lg p-3 text-sm flex flex-col gap-2">
+      <div class="card bg-white border rounded-lg p-3 text-sm flex flex-col gap-2 
+        cursor-pointer hover:shadow-md hover:-translate-y-0.5 
+        transition-all duration-200 group" 
+        data-card-id="${c.id}" 
+        onclick="openEditCard('${c.id}')">
         <div class="font-bold text-gray-800 truncate" title="${esc(c.title)}">${esc(c.title)}</div>
         
         ${c.description ? `<div class="text-gray-500 text-xs line-clamp-2">${esc(c.description)}</div>` : ''}
@@ -232,10 +292,10 @@ function _renderCard(c) {
           <span class="text-[10px] text-gray-400" title="Last update">${displayDate}</span>
           
           <div class="flex gap-2">
-            <button onclick="openEditCard('${c.id}')" class="text-blue-500 hover:text-blue-700">
+            <button onclick="event.stopPropagation(); openEditCard('${c.id}')" class="text-blue-500 hover:text-blue-700">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
             </button>
-            <button onclick="deleteCard('${c.id}')" class="text-red-400 hover:text-red-600">
+            <button onclick="event.stopPropagation(); deleteCard('${c.id}')" class="text-red-400 hover:text-red-600">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
             </button>
           </div>
@@ -246,8 +306,6 @@ function _renderCard(c) {
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // ── SortableJS: COLUMNS -------------------------------------------------------
-// [ADDED] Drag колонок — за шапку (.col-handle).
-// Все карточки "едут" вместе с колонкой т.к. они физически внутри её DOM-узла.
 function _initBoardSortable() {
   boardSortable = Sortable.create(document.getElementById('board'), {
     animation: 200,
@@ -257,20 +315,37 @@ function _initBoardSortable() {
     chosenClass: 'col-chosen',
     disabled: !currentUser,
     async onEnd(evt) {
-      if (!currentUser) return;
+      // if (!currentUser) return;
+      // const colId = evt.item.dataset.columnId;
+      // const newPos = evt.newIndex ?? 0;
+      // const col = columns.find(c=>c.id===colId);
+      // if (col) col.position = newPos;  // оптимистично
+
+      if (!currentUser || evt.oldIndex === evt.newIndex) return;
+
+      isUiLocked = true;
+
       const colId = evt.item.dataset.columnId;
-      const newPos = evt.newIndex ?? 0;
-      const col = columns.find(c=>c.id===colId);
-      if (col) col.position = newPos;  // оптимистично
-      try {
-        await api('PUT', `/columns/${colId}`, {position: newPos});
-      } catch(err) { logEvent('error','Column move failed: '+err.message); await loadBoard(); }
+      const newPos = evt.newIndex;
+
+      // 1. Сначала обновляем локальный массив columns, чтобы рендер был верным
+      const movedCol = columns.find(c => c.id === colId);
+      if (movedCol) {
+        // Удаляем из старого места и вставляем в новое
+        columns.splice(evt.oldIndex, 1);
+        columns.splice(evt.newIndex, 0, movedCol);
+        
+        // Пересчитываем position для всех колонок
+        columns.forEach((c, i) => c.position = i);
+      }
+      try { await api('PUT', `/columns/${colId}`, {position: newPos});} 
+      catch(err) {logEvent('error','Column move failed: '+err.message); await loadBoard();} 
+      finally{setTimeout(() => { isUiLocked = false; }, 500);}
     },
   });
 }
 
 // ── SortableJS: CARDS ---------------------------------------------------------
-// [ADDED] Drag карточек между колонками (group:'cards').
 function _initCardSortable(columnId) {
   const listEl = document.querySelector(`.card-list[data-col-id="${columnId}"]`);
   if (!listEl) return;
@@ -296,9 +371,12 @@ function _initCardSortable(columnId) {
       const mid=cardId, tCol=e.to.dataset.colId, tPos=e.newIndex??0;
       cardId=srcColId=null;
       const card=cards.find(c=>c.id===mid);
+      isUiLocked = true;
+
       if(card){card.column_id=tCol;card.position=tPos;}
       try { await api('POST',`/cards/${mid}/move`,{target_column_id:tCol,target_position:tPos}); }
       catch(err){logEvent('error','Card move failed: '+err.message);await loadBoard();}
+      finally {setTimeout(() => { isUiLocked = false; }, 500);}
     },
   });
   cardSortables.set(columnId, s);
@@ -365,10 +443,8 @@ async function submitCard(){
     };
 
     if(editId) {
-      console.log("Sending PUT to /cards/" + editId, payload);
       await api('PUT',`/cards/${editId}`, payload)
     } else {
-      console.log("Sending POST to /cards", payload);
       payload.column_id = colId;
       payload.created_by = currentUser.user_id;
       await api('POST','/cards', payload)
@@ -387,10 +463,33 @@ async function deleteCard(id){
 (async()=>{
   try {
     const me = await api('GET','/users/me');
-    currentUser = {user_id:me.user_id, username:me.username};
-    _uiLoggedIn();
-  } catch(_) { /* нет сессии — анонимный режим */ }
-  await loadBoard();
-  await loadOnlineUsers();
-  connectWS();
+    if (me && me.user_id) {
+        currentUser = { user_id: me.user_id, username: me.username };
+        _uiLoggedIn();
+        await Promise.all([
+            loadBoard(),
+            loadOnlineUsers(),
+            loadAllUsers()
+        ]);
+        connectWS();
+    } else {
+      _uiLoggedOut();
+    }
+  } catch(e) { _uiLoggedOut(); }
 })();
+
+// CUSTO JS || close dialog window
+document.addEventListener('click', (e) => {
+    if (e.target.tagName === 'DIALOG') {
+        const rect = e.target.getBoundingClientRect();
+        const isInDialog = (
+            rect.top <= e.clientY &&
+            e.clientY <= rect.top + rect.height &&
+            rect.left <= e.clientX &&
+            e.clientX <= rect.left + rect.width
+        );
+        if (!isInDialog) {
+            e.target.close();
+        }
+    }
+});
