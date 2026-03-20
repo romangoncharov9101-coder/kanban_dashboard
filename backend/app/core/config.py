@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     SESSION_SECRET_KEY: str = "CHANGE_ME_in_production_use_random_32+_chars"
     SESSION_TTL_SECONDS: int = 60 * 60 * 24
     SESSION_COOKIE_NAME: str = "tb_session"
+    EXPOSE_DOCS: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

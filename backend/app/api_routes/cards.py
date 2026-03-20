@@ -13,7 +13,8 @@ router = APIRouter(prefix='/cards', tags=['cards'])
 async def list_cards(
     column_id: uuid.UUID | None = Query(default=None),
     assigned_to: uuid.UUID | None = Query(default=None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     return await CardService(db).get_all(column_id=column_id, assigned_to=assigned_to)
 

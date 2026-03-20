@@ -43,7 +43,11 @@ app = FastAPI(
     title='taskBoard MVP',
     description='Async kanban — REST + WebSocket + cookie sessions',
     version='0.3.0',
-    lifespan=lifespan
+    lifespan=lifespan,
+
+    docs_url="/docs"      if settings.EXPOSE_DOCS else None,
+    redoc_url="/redoc"    if settings.EXPOSE_DOCS else None,
+    openapi_url="/openapi.json" if settings.EXPOSE_DOCS else None,
 )
 
 app.add_middleware(

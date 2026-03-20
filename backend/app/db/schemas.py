@@ -1,7 +1,8 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, Any
 from datetime import datetime
 from uuid import UUID
+import re
 
 #======================================================
 # Events
@@ -25,6 +26,13 @@ class CardCreate(BaseModel):
     assigned_to: UUID | None = None
     created_by: UUID
 
+    @field_validator('title')
+    @classmethod
+    def validate_username(cls, v: str):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+            raise ValueError('Название карточки может содержать только латинские или кирилические буквы без пробелов и знаков')
+        return v
+
 class CardUpdate(BaseModel):
     title: str | None = Field(..., min_length=1, max_length=200)
     description: str | None = None
@@ -44,7 +52,10 @@ class CardOut(BaseModel):
     created_by: UUID
     position: int
     created_at: datetime
-    updated_at: datetime
+    updated_at: datetime | None
+
+    created_by_username: str | None = None
+    assigned_to_username: str | None = None
 
     model_config = {'from_attributes': True}
 
@@ -53,6 +64,13 @@ class CardOut(BaseModel):
 #======================================================
 class ColumnCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator('name')
+    @classmethod
+    def validate_username(cls, v: str):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+            raise ValueError('Название колонки может содержать только латинские или кирилические буквы без пробелов и знаков')
+        return v
 
 class ColumnUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
@@ -70,11 +88,18 @@ class ColumnOut(BaseModel):
 #======================================================
 class UserLoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
-    password: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=6, max_length=128)
 
 class UserRegisterRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=100)
-    password: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=6, max_length=128)
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v: str):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+            raise ValueError('Никнейм может содержать только латинские или кирилические буквы без пробелов и знаков')
+        return v
 
 class UserOut(BaseModel):
     user_id: UUID

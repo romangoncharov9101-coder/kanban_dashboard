@@ -1,34 +1,56 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select, update, func
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Card
+from app.db.models import Card, User
 
 class CardRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    def _get_base_query(self):
+        Creator = aliased(User)
+        Assignee = aliased(User)
+
+        return select(
+            Card,
+            Creator.username.label('created_by_username'),
+            Assignee.username.label('assigned_to_username')
+        ).join(
+            Creator, Card.created_by == Creator.user_id
+        ).outerjoin(
+            Assignee, Card.assigned_to == Assignee.user_id
+        )
+    
+    def _map_row_to_card(self, row):
+        if not row:
+            return None
+        card = row.Card
+        card.created_by_username = row.created_by_username
+        card.assigned_to_username = row.assigned_to_username
+        return card
+
     async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None) -> list[Card]:
-        q = select(Card)
+        q = self._get_base_query()
         if column_id:
             q = q.where(Card.column_id == column_id)
         if assigned_to:
             q = q.where(Card.assigned_to == assigned_to)
         q = q.order_by(Card.column_id, Card.position)
         result = await self.session.execute(q)
-        return list(result.scalars().all())
+        return [self._map_row_to_card(row) for row in result.all()]
     
     async def get_by_id(self, card_id: uuid.UUID) -> Card | None:
-        result = await self.session.execute(
-            select(Card).where(Card.id == card_id)
-        )
-        return result.scalar_one_or_none()
+        q = self._get_base_query().where(Card.id == card_id)
+        result = await self.session.execute(q)
+        row = result.first()
+        return self._map_row_to_card(row)
     
     async def get_by_column_ordered(self, column_id: uuid.UUID) -> list[Card]:
-        result = await self.session.execute(
-            select(Card).where(Card.column_id == column_id).order_by(Card.position)
-        )
-        return list(result.scalars().all())
+        q = self._get_base_query().where(Card.column_id == column_id).order_by(Card.position)
+        result = await self.session.execute(q)
+        return [self._map_row_to_card(row) for row in result.all()]
     
     async def get_max_position_in_column(self, column_id: uuid.UUID) -> int:
         result = await self.session.execute(

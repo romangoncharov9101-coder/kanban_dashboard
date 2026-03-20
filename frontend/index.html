@@ -54,10 +54,10 @@
     <div id="auth-area" class="flex items-center gap-2">
       <input id="auth-username" type="text" placeholder="Username"
         class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" maxlength="30"/>
+        onkeydown="if(event.key==='Enter') doLogin()" maxlength="100"/>
       <input id="auth-password" type="password" placeholder="Password"
         class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" maxlength="108"/>
+        onkeydown="if(event.key==='Enter') doLogin()" maxlength="128"/>
       <button onclick="doLogin()"
         class="bg-indigo-600 text-white px-3 py-1.5 rounded text-sm hover:bg-indigo-700">Login</button>
       <button onclick="doRegister()"
@@ -124,8 +124,16 @@
       class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Save</button>
   </div>
   <label class="block text-sm text-gray-600 mb-1 leading-none mt-2">Assign To</label>
-  <select id="card-assign-select" class="border rounded w-full px-3 py-2 mb-3 text-sm bg-white">
-    </select>
+  <div class="relative mb-3">
+    <input id="card-assign-search" type="text" 
+          class="border rounded w-full px-3 py-2 text-sm bg-white" 
+          placeholder="Type username..."
+          autocomplete="off"
+          list="assign-suggestions">
+    
+    <datalist id="assign-suggestions"></datalist>
+    
+    <input type="hidden" id="card-assign-id">
 </dialog>
 </body>
 </html>

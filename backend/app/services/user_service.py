@@ -97,3 +97,8 @@ class UserService:
     async def get_all_users(self) -> list[UserOut]:
         users = await self.repo.get_all_users()
         return [UserOut.model_validate(u) for u in users]
+    
+    async def search_users(self, query: str) -> list[UserOut]:
+        if not query: return []
+        users = await self.repo.search_users(query)
+        return [UserOut.model_validate(u) for u in users]

@@ -28,6 +28,7 @@ services:
       EVENT_CLEANUP_INTERVAL: 300
       EVENT_MAX_AGE_SECONDS: 86400
       SESSION_SECRET_KEY: "change-me-generate-with-secrets-token-hex-32"
+      EXPOSE_DOCS: "false"
     # [EDITED] Бэкенд больше не публикует порт наружу — только через nginx
     expose:
       - "8000"

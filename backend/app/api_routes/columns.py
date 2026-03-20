@@ -10,7 +10,7 @@ from app.db.models import User
 router = APIRouter(prefix='/columns', tags=['columns'])
 
 @router.get('', response_model=list[ColumnOut])
-async def list_columns(db: AsyncSession = Depends(get_db)):
+async def list_columns(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await ColumnService(db).get_all()
 
 @router.post('', response_model=ColumnOut, status_code=status.HTTP_201_CREATED)

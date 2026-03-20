@@ -50,3 +50,7 @@ async def all_users(db: AsyncSession = Depends(get_db), current_user: User = Dep
 @router.get('/online', response_model=list[UserOut])
 async def online_users(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await UserService(db).get_online_users()
+
+@router.get('/search', response_model=list[UserOut])
+async def search_users(q: str = '', db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await UserService(db).search_users(q)

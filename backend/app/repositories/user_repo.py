@@ -47,5 +47,13 @@ class UserRepository:
         await self.session.flush()
         await self.session.refresh(user)
         return user
+    
+    async def search_users(self, query: str, limit: int = 5) -> list[User]:
+        result = await self.session.execute(
+            select(User)
+            .where(User.username.ilike(f'%{query}%'))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     
