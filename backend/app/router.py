@@ -20,6 +20,7 @@ async def websocke_enpoint(
     await manager.connect(ws)
 
     if user:
+        manager.bind_user(str(user.user_id), ws)
         async with AsyncSessionLocale() as session:
             try: 
                 repo = UserRepository(session)

@@ -5,6 +5,7 @@ from app.repositories.card_repo import CardRepository
 from app.repositories.column_repo import ColumnRepository
 from app.repositories.event_repo import EventRepository
 from app.repositories.user_repo import UserRepository
+from app.repositories.notif_repo import NotificationRepository
 from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut
 from app.manager import manager
 from app.core.logging import get_logger
@@ -19,6 +20,7 @@ class CardService:
         self.column_repo = ColumnRepository(session)
         self.event_repo = EventRepository(session)
         self.user_repo = UserRepository(session)
+        self.notif_repo = NotificationRepository(session)
 
     async def get_all(
             self,
@@ -49,12 +51,29 @@ class CardService:
         )
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
+
+        if card.assigned_to and str(card.assigned_to) != str(data.created_by):
+            creator = await self.user_repo.get_user_by_id(data.created_by)
+            notif_msg = {
+                'event': 'notification',
+                'payload': {
+                    'card_title': card.title,
+                    'from_user': creator.username if creator else 'System',
+                    'type': 'assigment'
+                }
+            }
+            success = await manager.send_personal_message(str(card.assigned_to), notif_msg)
+
+            if not success:
+                await self.notif_repo.ensure_notification_exists(card.assigned_to, card.id)
+
         await self.event_repo.create('card_created', payload, str(card.id))
         await manager.publish('card_created', str(card.id), payload)
+        await self.session.commit()
         logger.info(f'Card created: {card.id, card.title}')
         return out
     
-    async def update(self, card_id: uuid.UUID, data: CardUpdate) -> CardOut:
+    async def update(self, card_id: uuid.UUID, data: CardUpdate, current_user_id: uuid.UUID) -> CardOut:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Card not found')
@@ -62,6 +81,7 @@ class CardService:
         updates: dict = {}
         event_type = 'card_updated'
         original_column_id = card.column_id
+        old_assignee = card.assigned_to
  
         if data.title is not None:
             updates['title'] = data.title
@@ -91,12 +111,31 @@ class CardService:
  
         if event_type == 'card_moved':
             await self.repo.normalize_position_in_column(original_column_id)
- 
+
+        new_assignee = updates.get('assigned_to')
+        if new_assignee and new_assignee != old_assignee and str(new_assignee) != str(current_user_id):
+            if old_assignee:
+                await self.notif_repo.delete_all_for_user(old_assignee)
+
+            updater = await self.user_repo.get_user_by_id(current_user_id)
+            notif_msg = {
+                'event': 'notification',
+                'payload': {
+                    'card_title': card.title,
+                    'from_user': updater.username if updater else 'System',
+                    'type': 'assigment'
+                }
+            }
+            success = await manager.send_personal_message(str(new_assignee), notif_msg)
+
+            if not success:
+                await self.notif_repo.ensure_notification_exists(new_assignee, card.id)
+        
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
         await self.event_repo.create(event_type, payload, str(card.id))
         await manager.publish(event_type, str(card.id), payload)
-        
+        await self.session.commit()
         logger.info(f"Card {event_type, card.id}")
         return out
 
@@ -106,11 +145,13 @@ class CardService:
             raise HTTPException(status_code=404, detail='Card not found')
 
         column_id = card.column_id
+        await self.notif_repo.delete_by_card(card_id)
         await self.repo.delete(card)
         await self.repo.normalize_position_in_column(column_id)
         payload = {'id': str(card_id)}
         await self.event_repo.create('card_deleted', payload, str(card_id))
         await manager.publish('card_deleted', str(card_id), payload)
+        await self.session.commit()
         logger.info(f'Card deleted: {card_id}')
 
     async def move(self, card_id: uuid.UUID, data: CardMoveRequest) -> CardOut:
@@ -126,17 +167,6 @@ class CardService:
         same_column = source_column_id == data.target_column_id
 
         if same_column:
-            # cards = await self.repo.get_by_column_ordered(source_column_id)
-            # max_pos = len(cards) - 1
-            # target_pos = min(data.target_position, max_pos)
-
-            # card = [c for c in cards if c.id != card_id]
-            # cards.insert(target_pos, card)
-
-            # for idx, c in enumerate(cards):
-            #     c.position = idx
-            # await self.session.flush()
-
             cards = await self.repo.get_by_column_ordered(source_column_id)
             if card in cards:
                 cards.remove(card)

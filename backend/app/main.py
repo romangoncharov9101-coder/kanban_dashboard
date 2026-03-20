@@ -12,7 +12,7 @@ from app.exceptions import (
     validation_exception_handler,
     generic_exception_handler,
 )
-from app.api_routes import columns, cards, users, events
+from app.api_routes import columns, cards, users, events, notifications
 from app.router import router as ws_router
 from app.manager import manager
 from app.tasks import event_cleanup_task, session_cleanup_task
@@ -62,6 +62,7 @@ app.include_router(columns.router)
 app.include_router(cards.router)
 app.include_router(users.router)
 app.include_router(events.router)
+app.include_router(notifications.router)
 app.include_router(ws_router)
 
 @app.get('/health', tags=['meta'])

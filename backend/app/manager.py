@@ -9,6 +9,7 @@ logger = get_logger('wbsocket.manager')
 class ConnectionManager:
     def __init__(self):
         self._connections: dict[WebSocket, asyncio.Queue] = {}
+        self._user_to_ws: dict[str, WebSocket] = {}
         self.broadcast_queue: asyncio.Queue = asyncio.Queue()
 
     async def connect(self, ws: WebSocket) -> None:
@@ -16,9 +17,29 @@ class ConnectionManager:
         self._connections[ws] = asyncio.Queue()
         logger.info(f'WS connected - active connections: {len(self._connections)}')
 
+    def bind_user(self, user_id: str, ws: WebSocket):
+        self._user_to_ws[str(user_id)] = ws
+        logger.info(f'User {user_id} bound to websocket')
+
     def disconnect(self, ws: WebSocket) -> None:
         self._connections.pop(ws, None)
+        user_to_remove = None
+        for uid, socket in self._user_to_ws.items():
+            if socket == ws:
+                user_to_remove = uid
+                break
+        if user_to_remove:
+            self._user_to_ws.pop(user_to_remove)
         logger.info(f'WS disconnected — active connections: {len(self._connections)}')
+
+    async def send_personal_message(self, user_id, message: dict):
+        ws = self._user_to_ws.get(str(user_id))
+        if ws and ws in self._connections:
+            q = self._connections[ws]
+            data = json.dumps(message, default=str)
+            await q.put(data)
+            return True
+        return False
 
     async def broadcast(self, message: dict) -> None:
         data = json.dumps(message, default=str)

@@ -24,7 +24,7 @@ async def created_card(body: CardCreate, db: AsyncSession = Depends(get_db), cur
 
 @router.put('/{card_id}', response_model=CardOut)
 async def update_card(card_id: uuid.UUID, body: CardUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return await CardService(db).update(card_id, body)
+    return await CardService(db).update(card_id, body, current_user.user_id)
 
 @router.delete('/{card_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):

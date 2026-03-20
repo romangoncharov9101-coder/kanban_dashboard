@@ -54,7 +54,7 @@ async function doRegister() {
     // COOKIE: сервер отвечает Set-Cookie: session=...; HttpOnly; SameSite=Lax
     const d = await api('POST','/users/register',{username:u,password:p});
     currentUser = {user_id:d.user_id, username:d.username};
-    _uiLoggedIn();await loadBoard();await loadAllUsers();await loadOnlineUsers();
+    await _uiLoggedIn(d);await loadBoard();await loadAllUsers();await loadOnlineUsers();
     logEvent('user_online',`Registered as ${u}`);
   } catch(e) { alert('Register failed: '+e.message); }
 }
@@ -66,7 +66,7 @@ async function doLogin() {
   try {
     const d = await api('POST','/users/login',{username:u,password:p});
     currentUser = {user_id:d.user_id, username:d.username};
-    _uiLoggedIn();await loadBoard();await loadAllUsers();await loadOnlineUsers();
+    await _uiLoggedIn(d);await loadBoard();await loadAllUsers();await loadOnlineUsers();
     logEvent('user_online',`Logged in as ${u}`);
   } catch(e) { alert('Login failed: '+e.message); }
 }
@@ -100,16 +100,30 @@ async function doLogout() {
   }
 }
 
-function _uiLoggedIn() {
+async function _uiLoggedIn(user) {
+  if (!user) return; 
+  currentUser = user;
+
   document.getElementById('auth-area').classList.add('hidden');
   const ui = document.getElementById('user-info');
   ui.classList.remove('hidden'); ui.classList.add('flex');
   document.getElementById('current-username').textContent = currentUser.username;
   document.getElementById('btn-add-col').disabled = false;
-  // COOKIE: WS-handshake — браузер сам отправит cookie, query param не нужен
+
   connectWS();
+
+  try {
+    const status = await api('GET', '/notifications/check');
+    if (status && status.has_new_tasks) {
+      showOfflineNotification();
+    }
+  } catch (e) {
+    console.error("Failed to check offline notifications", e);
+  }
+
   renderBoard();
 }
+
 function _uiLoggedOut() {
   currentUser = null;
   document.getElementById('auth-area').classList.remove('hidden');
@@ -128,8 +142,14 @@ function connectWS() {
   ws = new WebSocket(`${WS_BASE}/ws`);
   ws.onerror = () => logEvent('error','WS error — will retry');
   ws.onmessage = async (e) => {
+
     let msg; try { msg=JSON.parse(e.data); } catch { return; }
     if (msg.event==='card_dragging') { _handleRemoteDrag(msg.payload); return; }
+    if (msg.event === 'notification') {
+        showNotification(msg.payload);
+        return;
+    }
+
     logEvent(msg.event, JSON.stringify(msg.payload));
     if (isUiLocked) return;
     switch(msg.event) {
@@ -203,6 +223,7 @@ async function loadOnlineUsers() {
 }
 
 async function loadAllUsers() {
+    if (!currentUser) return;
     try {
         const users = await api('GET', '/users');
         allUsers = users;
@@ -304,6 +325,84 @@ function _renderCard(c) {
 }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function showNotification(payload) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'fixed top-5 right-5 z-[9999] flex flex-col gap-3 pointer-events-none';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `
+    pointer-events-auto bg-white border-l-4 border-indigo-600 
+    shadow-2xl rounded-r-lg p-4 min-w-[300px] max-w-sm
+    animate-slide-in flex flex-col gap-1
+  `;
+
+  toast.innerHTML = `
+    <div class="flex justify-between items-center">
+        <span class="text-indigo-600 font-bold text-[10px] uppercase tracking-widest">Новая задача</span>
+        <button onclick="this.parentElement.parentElement.remove()" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+    </div>
+    <div class="text-gray-800 font-semibold text-sm">
+        ${esc(payload.card_title)}
+    </div>
+    <div class="text-gray-500 text-xs mt-1">
+        Назначил: <span class="font-medium text-gray-700">${esc(payload.from_user)}</span>
+    </div>
+  `;
+
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.5s ease';
+    setTimeout(() => toast.remove(), 500);
+  }, 6000);
+}
+
+async function showOfflineNotification() {
+  const container = document.getElementById('toast-container') || (() => {
+    const c = document.createElement('div');
+    c.id = 'toast-container';
+    c.className = 'fixed top-5 right-5 z-[9999] flex flex-col gap-3';
+    document.body.appendChild(c);
+    return c;
+  })();
+
+  const toast = document.createElement('div');
+  toast.className = `
+    bg-indigo-50 border-2 border-indigo-500 shadow-2xl rounded-xl p-5 min-w-[320px] 
+    animate-bounce-in flex flex-col gap-3 pointer-events-auto
+  `;
+
+  toast.innerHTML = `
+    <div class="flex items-center gap-3">
+      <div class="bg-indigo-500 text-white p-2 rounded-lg">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+      </div>
+      <div>
+        <h4 class="font-bold text-gray-900 text-sm">Пока вас не было...</h4>
+        <p class="text-gray-600 text-xs">Вам были назначены новые задачи!</p>
+      </div>
+    </div>
+    <button id="btn-clear-notif" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg transition-colors">
+      Понятно, спасибо!
+    </button>
+  `;
+
+  container.prepend(toast);
+
+  // Логика нажатия на "ОК"
+  toast.querySelector('#btn-clear-notif').onclick = async () => {
+    await api('DELETE', '/notifications/clear');
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+    logEvent('system', 'Offline notifications cleared');
+  };
+}
 
 // ── SortableJS: COLUMNS -------------------------------------------------------
 function _initBoardSortable() {
@@ -465,13 +564,12 @@ async function deleteCard(id){
     const me = await api('GET','/users/me');
     if (me && me.user_id) {
         currentUser = { user_id: me.user_id, username: me.username };
-        _uiLoggedIn();
+        await _uiLoggedIn(me);
         await Promise.all([
             loadBoard(),
             loadOnlineUsers(),
             loadAllUsers()
         ]);
-        connectWS();
     } else {
       _uiLoggedOut();
     }
