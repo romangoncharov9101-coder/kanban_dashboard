@@ -610,12 +610,12 @@ function downloadAllAttachmentsFor(cardId) {
   if (!card || !card.attachments || !card.attachments.length) {
     toast.info('Нет вложений для скачивания'); return;
   }
-  _downloadAttachments(card.attachments);
+  _downloadAttachments(card.attachments, card.id);
 }
 
-function _downloadAttachments(attachments) {
+function _downloadAttachments(attachments, cardId = null) {
   if (!attachments || !attachments.length) {toast.info('Нет вложений'); return;}
-  const cardId = document.getElementById('card-edit-id').value;
+  if (cardId === null) { cardId = document.getElementById('card-edit-id').value; }
   attachments.forEach((a, i) => {
     const attachmentId = a.id;
     setTimeout(() => {
@@ -1172,6 +1172,7 @@ function openEditCard(cardId) {
   _updateDeadlineClearBtn();
   document.getElementById('deadline-error').classList.add('hidden');
   pendingFiles = [];
+  pendingDeletions = [];
   _renderAttachmentsList(card.attachments || []);
   document.getElementById('modal-card').showModal();
   setTimeout(() => document.getElementById('card-title-input').focus(), 50);

@@ -2,4 +2,4 @@ backend/.env
 __pycache__/
 kanbanvenv/
 
-
+uploads/
