@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text
+from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.db.session import Base
@@ -39,8 +39,27 @@ class Card(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-
     column: Mapped['Column'] = relationship('Column', back_populates='cards')
+
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attachments: Mapped[list['Attachment']] = relationship('Attachment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
+
+    __table_args__ = (
+        CheckConstraint('deadline >= created_at', name='check_deadline_future'),
+    )
+
+class Attachment(Base):
+    __tablename__ = 'attachments'
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    card_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('cards.id', ondelete='CASCADE'), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    card: Mapped['Card'] = relationship('Card', back_populates='attachments')
+
 
 class Event(Base):
     __tablename__ = 'events'

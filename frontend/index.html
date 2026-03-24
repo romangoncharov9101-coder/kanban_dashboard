@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TaskBoard MVP</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="./static/scripts.js"></script>
+  <script src="./static/test.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; }
@@ -32,6 +32,7 @@
       animation: slideInRight 0.4s ease-out forwards;
     }
 
+    /* ── Toast animations ────────────────────────────────────────────── */
     @keyframes slide-in {
       from { transform: translateX(100%); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
@@ -44,96 +45,238 @@
       100% { transform: scale(1); }
     }
     .animate-bounce-in { animation: bounce-in 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards; }
+
+    /* ── Dialog ──────────────────────────────────────────────────────── */
+    dialog { border:none; border-radius:1rem; padding:0; box-shadow:0 25px 60px rgba(0,0,0,.25); max-width:95vw; }
+    dialog::backdrop { background:rgba(0,0,0,.45); backdrop-filter:blur(2px); }
+
+    /* ── Deadline badge colours ──────────────────────────────────────── */
+    .deadline-ok      { background:#dcfce7; color:#15803d; }
+    .deadline-soon    { background:#fef9c3; color:#a16207; }   /* <24 h */
+    .deadline-overdue { background:#fee2e2; color:#b91c1c; }
+
+    /* ── Flat datetime-local input ───────────────────────────────────── */
+    input[type="datetime-local"] { color-scheme: light; }
+ 
+    /* ── Card preview image ──────────────────────────────────────────── */
+    .card-preview-img { width:100%; height:100px; object-fit:cover; border-radius:.5rem .5rem 0 0; display:block; }
+ 
+    /* ── Scrollbar thin ─────────────────────────────────────────────── */
+    .thin-scroll::-webkit-scrollbar { width:4px; }
+    .thin-scroll::-webkit-scrollbar-track { background:transparent; }
+    .thin-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+ 
+    /* ── Responsive board ────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      #board { flex-direction:column; align-items:stretch; overflow-x:visible; }
+      #board > div { min-width:unset !important; max-width:unset !important; }
+      main { padding:0.75rem; }
+    }
   </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
 
+<!-- ── TOAST container ─────────────────────────────────────────────────── -->
+<div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none w-80 max-w-[calc(100vw-2rem)]"></div>
+
+<!-- ── HEADER ──────────────────────────────────────────────────────────── -->
 <header class="bg-white shadow-sm px-6 py-3 flex items-center justify-between">
-  <h1 class="text-xl font-bold text-indigo-600">📋 TaskBoard MVP</h1>
-  <div class="flex items-center gap-4">
-    <div id="auth-area" class="flex items-center gap-2">
-      <input id="auth-username" type="text" placeholder="Username"
-        class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" maxlength="100"/>
-      <input id="auth-password" type="password" placeholder="Password"
-        class="border rounded px-3 py-1.5 text-sm w-32"
-        onkeydown="if(event.key==='Enter') doLogin()" maxlength="128"/>
+  <h1 class="text-lg font-bold text-indigo-600 flex items-center gap-2">
+    <span>📋</span><span class="hidden sm:inline">TaskBoard</span>
+  </h1>
+  <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+    <div id="auth-area" class="flex items-center gap-1 sm:gap-2">
+      <input id="auth-username" type="text" placeholder="Логин"
+        class="border rounded px-2 py-1.5 text-sm w-24 sm:w-28" maxlength="100"
+        onkeydown="if(event.key==='Enter') doLogin()" />
+      <input id="auth-password" type="password" placeholder="Пароль"
+        class="border rounded px-2 py-1.5 text-sm w-24 sm:w-28" maxlength="128"
+        onkeydown="if(event.key==='Enter') doLogin()" />
       <button onclick="doLogin()"
-        class="bg-indigo-600 text-white px-3 py-1.5 rounded text-sm hover:bg-indigo-700">Login</button>
+        class="bg-indigo-600 text-white px-2.5 py-1.5 rounded text-sm hover:bg-indigo-700 whitespace-nowrap">Войти</button>
       <button onclick="doRegister()"
-        class="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700">Register</button>
+        class="bg-emerald-600 text-white px-2.5 py-1.5 rounded text-sm hover:bg-emerald-700 whitespace-nowrap">Регистр.</button>
     </div>
-    <div id="user-info" class="hidden items-center gap-2 text-sm text-gray-600">
-      👤 <span id="current-username" class="font-semibold"></span>
+    <!-- User info -->
+    <div id="user-info" class="hidden items-center gap-2 text-sm text-slate-600">
+      <span class="font-semibold text-slate-800">👤 <span id="current-username"></span></span>
       <button onclick="doLogout()"
-        class="text-xs text-gray-400 hover:text-red-500 border rounded px-2 py-0.5">Logout</button>
+        class="text-xs text-slate-400 hover:text-red-500 border rounded px-2 py-1">Выйти</button>
     </div>
   </div>
 </header>
 
-<main class="p-6">
-  <div class="flex gap-4 mb-3 items-center">
-    <h2 class="text-lg font-semibold text-gray-700">Board</h2>
+<!-- ── MAIN ────────────────────────────────────────────────────────────── -->
+<main class="p-3 sm:p-6">
+  <div class="flex flex-wrap gap-3 mb-3 items-center">
+    <h2 class="text-base font-semibold text-slate-700">Доска</h2>
     <button id="btn-add-col" onclick="openAddColumn()" disabled
-      class="bg-green-500 text-white px-3 py-1 rounded text-sm hover:bg-green-600
-             disabled:opacity-40 disabled:cursor-not-allowed">+ Column</button>
+      class="bg-emerald-500 text-white px-3 py-1 rounded text-sm hover:bg-emerald-600
+             disabled:opacity-40 disabled:cursor-not-allowed">+ Колонка</button>
   </div>
-  <div class="mb-4 flex gap-2 items-center text-sm text-gray-600">
-    <span class="font-medium">Online:</span>
-    <div id="online-users" class="flex gap-2 flex-wrap"></div>
+  <div class="flex gap-1.5 items-center text-sm text-slate-500 ml-auto mb-3">
+    <span class="font-medium text-xs">Online:</span>
+    <div id="online-users" class="flex gap-1.5 flex-wrap"></div>
   </div>
   <div id="board" class="flex gap-4 overflow-x-auto pb-6 items-start"></div>
 </main>
 
-<aside class="fixed bottom-4 right-4 w-80 bg-white border-t border-l shadow-lg z-10">
-  <div class="flex justify-between items-center px-4 py-2 bg-gray-50 border-b">
-    <span class="text-sm font-semibold text-gray-700">Event Log</span>
-    <button onclick="clearLog()" class="text-xs text-gray-400 hover:text-gray-600">Clear</button>
+<!-- ── EVENT LOG ───────────────────────────────────────────────────────── -->
+<aside class="fixed bottom-4 right-4 w-72 bg-white border border-slate-200 rounded-xl shadow-lg z-10 hidden sm:block">
+  <div class="flex justify-between items-center px-3 py-2 bg-slate-50 rounded-t-xl border-b">
+    <span class="text-xs font-semibold text-slate-600">Event Log</span>
+    <button onclick="clearLog()" class="text-xs text-slate-400 hover:text-slate-600">Очистить</button>
   </div>
-  <div id="event-log" class="overflow-y-auto text-xs font-mono p-2 space-y-1" style="max-height:180px;"></div>
+  <div id="event-log" class="overflow-y-auto text-[11px] font-mono p-2 space-y-0.5 thin-scroll" style="max-height:160px;"></div>
 </aside>
 
-<dialog id="modal-add-column" class="rounded-lg shadow-xl p-6 w-80">
-  <h3 class="font-semibold mb-3">New Column</h3>
-  <input id="new-col-name" type="text" placeholder="Column name"
-    class="border rounded w-full px-3 py-2 mb-3 text-sm"
-    onkeydown="if(event.key==='Enter') submitAddColumn()" maxlength="100"/>
-  <div class="flex justify-end gap-2">
-    <button onclick="document.getElementById('modal-add-column').close()"
-      class="px-3 py-1 text-sm text-gray-500">Cancel</button>
-    <button onclick="submitAddColumn()"
-      class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Create</button>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL: Add Column
+════════════════════════════════════════════════════════════════════════ -->
+<dialog id="modal-add-column">
+  <div class="p-6 w-80">
+    <h3 class="font-semibold text-slate-800 mb-4">Новая колонка</h3>
+    <input id="new-col-name" type="text" placeholder="Название колонки" maxlength="100"
+      class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+      onkeydown="if(event.key==='Enter') submitAddColumn()" />
+    <div class="flex justify-end gap-2">
+      <button onclick="document.getElementById('modal-add-column').close()"
+        class="px-4 py-1.5 text-sm text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">Отмена</button>
+      <button onclick="submitAddColumn()"
+        class="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-indigo-700">Создать</button>
+    </div>
   </div>
 </dialog>
 
-<dialog id="modal-card" class="rounded-lg shadow-xl p-6 w-96">
-  <h3 id="modal-card-title" class="font-semibold mb-3">Card</h3>
-  <input type="hidden" id="card-edit-id" />
-  <input type="hidden" id="card-col-id" />
-  <label class="block text-sm text-gray-600 mb-1">Title</label>
-  <input id="card-title-input" type="text" maxlength="200"
-    class="border rounded w-full px-3 py-2 mb-3 text-sm"
-    onkeydown="if(event.key==='Enter') submitCard()" maxlength="100"/>
-  <label class="block text-sm text-gray-600 mb-1">Description</label>
-  <textarea id="card-desc-input" rows="3"
-    class="border rounded w-full px-3 py-2 mb-3 text-sm resize-none" maxlength="400"></textarea>
-  <div class="flex justify-end gap-2">
-    <button onclick="document.getElementById('modal-card').close()"
-      class="px-3 py-1 text-sm text-gray-500">Cancel</button>
-    <button onclick="submitCard()"
-      class="bg-indigo-600 text-white px-4 py-1 rounded text-sm hover:bg-indigo-700">Save</button>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL: Card (Create / Edit)
+════════════════════════════════════════════════════════════════════════ -->
+<dialog id="modal-card">
+  <div class="w-full sm:w-[480px] max-h-[90vh] overflow-y-auto thin-scroll">
+ 
+    <!-- Header -->
+    <div class="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-100">
+      <h3 id="modal-card-title" class="font-semibold text-slate-800 text-base">Карточка</h3>
+      <button onclick="document.getElementById('modal-card').close()"
+        class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+ 
+    <div class="px-6 py-4 flex flex-col gap-4">
+      <!-- Hidden fields -->
+      <input type="hidden" id="card-edit-id" />
+      <input type="hidden" id="card-col-id" />
+ 
+      <!-- Title -->
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Заголовок *</label>
+        <input id="card-title-input" type="text" maxlength="200" placeholder="Название задачи"
+          class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          onkeydown="if(event.key==='Enter' && !event.shiftKey) submitCard()" />
+      </div>
+ 
+      <!-- Description -->
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Описание</label>
+        <textarea id="card-desc-input" rows="3" maxlength="1000" placeholder="Подробное описание…"
+          class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+      </div>
+ 
+      <!-- Deadline -->
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Дедлайн</label>
+        <div class="relative">
+          <input id="card-deadline-input" type="datetime-local"
+            class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 pr-8" />
+          <!-- Clear button -->
+          <button id="card-deadline-clear" type="button" onclick="clearDeadline()"
+            class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-400 hidden text-base leading-none"
+            title="Очистить дедлайн">×</button>
+        </div>
+        <p id="deadline-error" class="text-red-500 text-xs mt-1 hidden">Дедлайн должен быть позже текущего времени</p>
+        <!-- Quick presets -->
+        <div class="flex gap-2 mt-1.5 flex-wrap">
+          <button type="button" onclick="setDeadlinePreset(1)"
+            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 день</button>
+          <button type="button" onclick="setDeadlinePreset(3)"
+            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+3 дня</button>
+          <button type="button" onclick="setDeadlinePreset(7)"
+            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 нед</button>
+          <button type="button" onclick="setDeadlinePreset(30)"
+            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 мес</button>
+        </div>
+      </div>
+ 
+      <!-- Assignee search -->
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Назначить</label>
+        <div class="relative">
+          <input id="card-assign-search" type="text" autocomplete="off" list="assign-suggestions"
+            placeholder="Введите имя пользователя…"
+            class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          <datalist id="assign-suggestions"></datalist>
+          <input type="hidden" id="card-assign-id" />
+        </div>
+      </div>
+ 
+      <!-- ═══════════════════════════════════════════════
+           ВЛОЖЕНИЯ — показывается ВСЕГДА (и при создании, и при редактировании)
+           При создании файлы хранятся в pendingFiles и загружаются после сохранения карточки
+      ═══════════════════════════════════════════════ -->
+      <div id="attachments-section">
+        <label class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">Вложения</label>
+
+        <!-- DROP ZONE: перетянуть файл / нажать / вставить из буфера -->
+        <div id="drop-zone"
+          class="relative border-2 border-dashed border-slate-300 rounded-xl p-4
+                 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50
+                 transition-colors group"
+          onclick="document.getElementById('attachment-file-input').click()"
+          ondragover="event.preventDefault(); this.classList.add('border-indigo-500','bg-indigo-50')"
+          ondragleave="this.classList.remove('border-indigo-500','bg-indigo-50')"
+          ondrop="handleFileDrop(event)">
+
+          <svg class="w-8 h-8 mx-auto mb-1.5 text-slate-300 group-hover:text-indigo-400 transition-colors"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+          </svg>
+          <p class="text-xs text-slate-500">
+            Перетяните файл сюда, <span class="text-indigo-600 font-medium">выберите</span>
+            или вставьте из буфера <kbd class="bg-slate-100 px-1 rounded text-[10px]">Ctrl+V</kbd>
+          </p>
+          <p class="text-[10px] text-slate-400 mt-1">Изображения, PDF, DOC, XLS, TXT, ZIP · до 5 МБ</p>
+
+          <input id="attachment-file-input" type="file" class="hidden"
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+            multiple
+            onchange="handleFileInputChange(event)" />
+        </div>
+
+        <!-- Список файлов -->
+        <div id="attachments-list" class="flex flex-col gap-1.5 mt-2"></div>
+
+        <!-- Кнопка "скачать все" — активна только если есть файлы -->
+        <button id="btn-download-all" onclick="downloadAllAttachments()"
+          class="mt-2 w-full text-xs px-3 py-1.5 border border-slate-300 rounded-lg
+                 text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-1.5
+                 disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Скачать все вложения
+        </button>
+      </div>
+    </div>
+ 
+    <!-- Footer -->
+    <div class="flex justify-end gap-2 px-6 pb-5 pt-2 border-t border-slate-100">
+      <button onclick="document.getElementById('modal-card').close()"
+        class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">Отмена</button>
+      <button onclick="submitCard()"
+        class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700 font-medium">Сохранить</button>
+    </div>
   </div>
-  <label class="block text-sm text-gray-600 mb-1 leading-none mt-2">Assign To</label>
-  <div class="relative mb-3">
-    <input id="card-assign-search" type="text" 
-          class="border rounded w-full px-3 py-2 text-sm bg-white" 
-          placeholder="Type username..."
-          autocomplete="off"
-          list="assign-suggestions">
-    
-    <datalist id="assign-suggestions"></datalist>
-    
-    <input type="hidden" id="card-assign-id">
 </dialog>
 </body>
 </html>

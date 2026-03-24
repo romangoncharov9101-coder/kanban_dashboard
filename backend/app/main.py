@@ -87,6 +87,10 @@ print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
 app.mount("/static", StaticFiles(directory=os.path.join(frontend_path, "static")), name="static")
 
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "attachments")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 @app.get("/")
 async def get_index():
     return FileResponse(os.path.join(frontend_path, 'index.html'))

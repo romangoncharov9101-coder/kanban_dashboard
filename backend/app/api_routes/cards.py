@@ -1,9 +1,9 @@
 import uuid
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.card_service import CardService
-from app.db.schemas import  CardCreate, CardUpdate, CardMoveRequest, CardOut
+from app.db.schemas import  CardCreate, CardUpdate, CardMoveRequest, CardOut, AttachmentOut
 from app.core.deps import get_current_user
 from app.db.models import User
 
@@ -34,3 +34,20 @@ async def delete_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), cu
 @router.post('/{card_id}/move', response_model=CardOut)
 async def move_card(card_id: uuid.UUID, body: CardMoveRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await CardService(db).move(card_id, body)
+
+@router.post('/{card_id}/attachments', response_model=AttachmentOut, status_code=status.HTTP_201_CREATED)
+async def upload_attachment(card_id: uuid.UUID, file: UploadFile, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).upload_card_file(card_id, file)
+
+@router.get('/{card_id}/attachments/{attachment_id}/download')
+async def download_attachment(
+    card_id: uuid.UUID, 
+    attachment_id: uuid.UUID, 
+    db: AsyncSession = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    return await CardService(db).get_attachment_file_response(attachment_id)
+
+@router.delete('/attachments/{attachment_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_attachment(attachment_id: uuid.UUID, db:AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).delete_attachment(attachment_id)

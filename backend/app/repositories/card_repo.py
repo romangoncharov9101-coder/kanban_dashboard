@@ -1,9 +1,9 @@
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select, update, func
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Card, User
+from app.db.models import Card, User, Attachment
 
 class CardRepository:
     def __init__(self, session: AsyncSession):
@@ -21,6 +21,8 @@ class CardRepository:
             Creator, Card.created_by == Creator.user_id
         ).outerjoin(
             Assignee, Card.assigned_to == Assignee.user_id
+        ).options(
+            selectinload(Card.attachments)
         )
     
     def _map_row_to_card(self, row):
@@ -66,7 +68,8 @@ class CardRepository:
             position: int,
             created_by: uuid.UUID,
             description: str = None,
-            assigned_to: uuid.UUID = None
+            assigned_to: uuid.UUID = None,
+            deadline: datetime = None
     ) -> Card:
         now = datetime.now(timezone.utc)
         card = Card(
@@ -77,12 +80,12 @@ class CardRepository:
             assigned_to=assigned_to,
             created_by=created_by,
             position=position,
+            deadline=deadline,
             created_at=now
         )
         self.session.add(card)
         await self.session.flush()
-        await self.session.refresh(card)
-        return card
+        return await self.get_by_id(card.id)
     
     async def update(self, card: Card, **kwargs) -> Card:
         for k, v in kwargs.items():
@@ -110,4 +113,28 @@ class CardRepository:
             .values(position=Card.position + 1)
         )
 
+    async def get_attachment_by_id(self, attachment_id: uuid.UUID) -> Attachment:
+        q = select(Attachment).where(Attachment.id == attachment_id)
+        result = await self.session.execute(q)
+        return result.scalar_one_or_none()
+
+    async def get_attachment_count(self, card_id: uuid.UUID) -> int:
+        result = await self.session.execute(
+            select(func.count(Attachment.id)).where(Attachment.card_id == card_id)
+        )
+        return result.scalar() or 0
     
+    async def add_attachment(self, attachment_data: dict) -> Attachment:
+        db_attachment = Attachment(**attachment_data)
+        self.session.add(db_attachment)
+        await self.session.flush()
+        return db_attachment
+    
+    async def delete_attachment(self, attachment_id: uuid.UUID):
+        result = await self.session.execute(
+            select(Attachment).where(Attachment.id == attachment_id)
+        )
+        attachment = result.scalar_one_or_none()
+        if attachment:
+            await self.session.delete(attachment)
+
