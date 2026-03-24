@@ -16,10 +16,8 @@ let columns = [], cards = [], onlineUsers = [];
 let boardSortable = null;
 let searchTimeout = null;
 const remoteDrags = new Map();
-// [ADDED] Очередь файлов для карточек создаваемых впервые.
-// При создании у нас ещё нет card_id → файлы копятся здесь,
-// после POST /cards загружаются одним батчем.
 let pendingFiles = [];
+let pendingDeletions = [];
 const cardSortables = new Map();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -718,7 +716,7 @@ function _renderAttachmentsList(attachments) {
     delBtn.className = 'text-red-400 hover:text-red-600 flex-shrink-0';
     delBtn.title = 'Удалить';
     delBtn.textContent = '✕';
-    delBtn.onclick = () => deleteAttachment(a.id);
+    delBtn.onclick = () => deleteAttachment(a.id, a.isPending);
  
     item.appendChild(iconSpan);
     item.appendChild(nameEl);
@@ -770,14 +768,30 @@ async function _processFiles(files) {
       toast.warn(`«${file.name}» — неподдерживаемый тип файла`); continue;
     }
 
-    if (cardId) {
-      // Режим редактирования — загружаем сразу
-      await _uploadFileTo(cardId, file);
-    } else {
-      // Режим создания — буферизуем в pendingFiles
-      _addToPending(file);
-    }
+    // if (cardId) {
+    //   await _uploadFileTo(cardId, file);
+    // } else {
+    //   _addToPending(file);
+    // }
+    _addToPending(file); // ADDED
   }
+  _refreshAttachmentsUI(); // ADDED
+}
+
+// ADDED
+function _refreshAttachmentsUI() {
+  const cardId = document.getElementById('card-edit-id').value;
+  const card = cards.find(c => c.id === cardId);
+  
+  const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
+  
+  const pending = pendingFiles.map((f, index) => ({
+    id: `pending-${index}`,
+    filename: f.name,
+    isPending: true
+  }));
+
+  _renderAttachmentsList([...existing, ...pending]);
 }
 
 function _addToPending(file) {
@@ -867,16 +881,22 @@ async function uploadAttachment() {
   fileInput.value = '';
 }
 
-async function deleteAttachment(attachmentId) {
-  const cardId = document.getElementById('card-edit-id').value;
-  await api('DELETE', `/cards/attachments/${attachmentId}`);
-  const card = cards.find(c => c.id === cardId);
-  if (card && card.attachments) {
-    card.attachments = card.attachments.filter(a => a.id !== attachmentId);
-    _renderAttachmentsList(card.attachments);
-    renderBoard();
+async function deleteAttachment(attachmentId, isPending = false) {
+  if (isPending) {
+    pendingFiles = pendingFiles.filter(f => f.name !== attachmentId);
+  } else {
+    if (!pendingDeletions.includes(attachmentId)) {
+      pendingDeletions.push(attachmentId);
+    }
   }
-  toast.success('Вложение удалено');
+
+  const cardId = document.getElementById('card-edit-id').value;
+  const card = cards.find(c => c.id === cardId);
+  const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
+  const pending = pendingFiles.map(f => ({ filename: f.name, isPending: true }));
+  
+  _renderAttachmentsList([...existing, ...pending]);
+  toast.success('Вложение помечено на удаление.');
 }
 
 function downloadAllAttachments() {
@@ -1156,7 +1176,7 @@ function openEditCard(cardId) {
   document.getElementById('modal-card').showModal();
   setTimeout(() => document.getElementById('card-title-input').focus(), 50);
 }
- 
+
 async function submitCard() {
   const editId     = document.getElementById('card-edit-id').value;
   const colId      = document.getElementById('card-col-id').value;
@@ -1164,7 +1184,6 @@ async function submitCard() {
   const desc       = document.getElementById('card-desc-input').value.trim();
   const assigneeId = document.getElementById('card-assign-id').value.trim() || null;
 
- 
   if (!title) return toast.warn('Заголовок обязателен');
 
   const deadlineRaw = document.getElementById('card-deadline-input').value;
@@ -1176,23 +1195,42 @@ async function submitCard() {
       return;
     }
   }
- 
+
   const payload = { title, description: desc || null, assigned_to: assigneeId, deadline };
- 
+
   let result;
-  if (editId) {
-    result = await api('PUT', `/cards/${editId}`, payload);
-  } else {
-    result = await api('POST', '/cards', {
-      ...payload, column_id: colId, created_by: currentUser.user_id,
-    });
-    if (result && pendingFiles.length) {
-      await _flushPendingFiles(result.id);
+  try {
+    if (editId) {
+      if (pendingDeletions.length > 0) {
+        for (const attachId of pendingDeletions) {
+          await api('DELETE', `/cards/attachments/${attachId}`);
+        }
+      }
+      result = await api('PUT', `/cards/${editId}`, payload);
+    } else {
+      result = await api('POST', '/cards', {
+        ...payload, column_id: colId, created_by: currentUser.user_id,
+      });
     }
+
+    if (result && result.id && pendingFiles.length > 0) {
+      await _flushPendingFiles(result.id); 
+    }
+
+    if (result) {
+      pendingFiles = [];
+      pendingDeletions = [];
+      
+      document.getElementById('modal-card').close();
+      toast.success(editId ? 'Задача обновлена' : 'Задача создана');
+      
+      renderBoard();
+    }
+
+  } catch (error) {
+    console.error('Ошибка при сохранении карточки или вложений:', error);
+    toast.error('Произошла ошибка при сохранении');
   }
-  if (result) document.getElementById('modal-card').close();
-  toast.success(editId ? 'Задача обновлена' : 'Задача создана');
-  renderBoard();
 }
  
 async function deleteCard(id) {
