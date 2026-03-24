@@ -25,14 +25,14 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
     if not cookie_value:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Не авторизирован.",
         )
     
     session_id = unsign_session_id(cookie_value)
     if session_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Invalid session',
+            detail='Неправильная сессия.',
         )
     
     repo = SessionRepository(db)
@@ -40,21 +40,11 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
     if db_session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail='Session expired or not found',
+            detail='Сессия истекла или не найдена.',
         )
     return db_session.user
 
 async def get_current_user_ws(ws) -> User | None:
-    """
-    Версия для WebSocket-handshake.
-
-    Cookie автоматически отправляется браузером при WS-подключении
-    (тот же origin, браузер прикрепляет все подходящие cookies).
-    Никаких query params — просто ws://host/ws.
-
-    Возвращает None для анонимных соединений.
-    Создаёт собственную DB-сессию (WS не поддерживает FastAPI Depends).
-    """
     cookie_header: str = ws.headers.get('cookie', '')
     cookie_value: str | None = _parse_cookie(cookie_header, settings.SESSION_COOKIE_NAME)
     if not cookie_value:

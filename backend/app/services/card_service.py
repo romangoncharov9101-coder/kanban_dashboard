@@ -42,12 +42,12 @@ class CardService:
     async def create(self, data: CardCreate) -> CardOut:
         col = await self.column_repo.get_by_id(data.column_id)
         if not col:
-            raise HTTPException(status_code=404, detail="Column not found")
+            raise HTTPException(status_code=404, detail="Колонка не найдена.")
         
         if data.assigned_to:
             user = await self.user_repo.get_user_by_id(data.assigned_to)
             if not user:
-                raise HTTPException(status_code=404, detail="Assigned user not found")
+                raise HTTPException(status_code=404, detail="Исполняющий пользователь не найден.")
             
         max_pos = await self.repo.get_max_position_in_column(data.column_id)
         card = await self.repo.create(
@@ -86,7 +86,7 @@ class CardService:
     async def update(self, card_id: uuid.UUID, data: CardUpdate, current_user_id: uuid.UUID) -> CardOut:
         card = await self.repo.get_by_id(card_id)
         if not card:
-            raise HTTPException(status_code=404, detail='Card not found')
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
  
         updates: dict = {}
         event_type = 'card_updated'
@@ -105,7 +105,7 @@ class CardService:
         if data.assigned_to is not None:
             user = await self.user_repo.get_user_by_id(data.assigned_to)
             if not user:
-                raise HTTPException(status_code=404, detail='Assigned user not found')
+                raise HTTPException(status_code=404, detail='Исполняющий пользователь не найден.')
             updates['assigned_to'] = data.assigned_to
         if 'assigned_to' in data.model_fields_set and data.assigned_to is None:
             updates['assigned_to'] = None
@@ -113,7 +113,7 @@ class CardService:
         if data.column_id is not None and data.column_id != card.column_id:
             col = await self.column_repo.get_by_id(data.column_id)
             if not col:
-                raise HTTPException(status_code=404, detail='Target column not found')
+                raise HTTPException(status_code=404, detail='Целевая колонка не найдена.')
             max_pos = await self.repo.get_max_position_in_column(data.column_id)
             updates['column_id'] = data.column_id
             updates['position'] = max_pos + 1
@@ -154,7 +154,7 @@ class CardService:
     async def delete(self, card_id: uuid.UUID) -> None:
         card = await self.repo.get_by_id(card_id)
         if not card:
-            raise HTTPException(status_code=404, detail='Card not found')
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
         
         stmt = select(Attachment).where(Attachment.card_id == card_id)
         result = await self.session.execute(stmt)
@@ -183,11 +183,11 @@ class CardService:
     async def move(self, card_id: uuid.UUID, data: CardMoveRequest) -> CardOut:
         card = await self.repo.get_by_id(card_id)
         if not card:
-            raise HTTPException(status_code=404, detail='Card not found')
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
  
         target_col = await self.column_repo.get_by_id(data.target_column_id)
         if not target_col:
-            raise HTTPException(status_code=404, detail='Target column not found')
+            raise HTTPException(status_code=404, detail='Целевая колонка не найдена.')
         
         source_column_id = card.column_id
         same_column = source_column_id == data.target_column_id
@@ -242,7 +242,7 @@ class CardService:
         
         if not attachment:
             logger.warning(f"Attachment {attachment_id} not found in DB")
-            raise HTTPException(status_code=404, detail="Вложение не найдено")
+            raise HTTPException(status_code=404, detail="Вложение не найдено.")
             
         return attachment
     
@@ -251,7 +251,7 @@ class CardService:
         
         if not attachment.file_path or not os.path.exists(attachment.file_path):
             logger.error(f"File missing on disk: {attachment.file_path}")
-            raise HTTPException(status_code=404, detail="Файл физически отсутствует на сервере")
+            raise HTTPException(status_code=404, detail="Файл физически отсутствует на сервере.")
 
         return FileResponse(
             path=attachment.file_path,
@@ -262,7 +262,7 @@ class CardService:
     async def get_card_attachments(self, card_id: uuid.UUID) -> list[Attachment]:
         card = await self.repo.get_by_id(card_id)
         if not card:
-            raise HTTPException(status_code=404, detail="Карточка не найдена")
+            raise HTTPException(status_code=404, detail="Карточка не найдена.")
             
         stmt = select(Attachment).where(Attachment.card_id == card_id)
         result = await self.session.execute(stmt)
@@ -271,12 +271,12 @@ class CardService:
     async def upload_card_file(self, card_id: uuid.UUID, file: UploadFile):
         count = await self.repo.get_attachment_count(card_id)
         if count >= 5:
-            raise HTTPException(status_code=400, detail="Максимум 5 файлов на карточку")
+            raise HTTPException(status_code=400, detail="Максимум 5 файлов на карточку.")
         
         MAX_SIZE = 5 * 1024 * 1024
         file_content = await file.read()
         if len(file_content) > MAX_SIZE:
-            raise HTTPException(status_code=413, detail="Файл слишком большой (максимальный размер файла 50MB)")
+            raise HTTPException(status_code=413, detail="Файл слишком большой (максимальный размер файла 5MB).")
         
         file_extension = os.path.splitext(file.filename)[1]
         unique_filename = f'{card_id}_{os.urandom(4).hex()}{file_extension}'
@@ -294,6 +294,11 @@ class CardService:
             'content_type': file.content_type
         }
         attachment = await self.repo.add_attachment(attachment_data)
+        updated_card = await self.repo.get_by_id(card_id)
+        out = CardOut.model_validate(updated_card)
+        payload = out.model_dump(mode='json')
+        await manager.publish('card_updated', str(card_id), payload)
+
         await self.session.commit()
         logger.info(f"Attachment saved to DB: {attachment.id} for card {card_id}")
         return attachment
@@ -301,24 +306,30 @@ class CardService:
     async def delete_attachment(self, attachment_id: uuid.UUID):
         attachment = await self.repo.get_attachment_by_id(attachment_id)
         if not attachment:
-            raise HTTPException(status_code=404, detail="Карточка не найдена")
+            raise HTTPException(status_code=404, detail="Карточка не найдена.")
         
         stmt = select(Attachment).where(Attachment.id == attachment_id)
         result = await self.session.execute(stmt)
         attachment = result.scalar_one_or_none()
+        card_id = attachment.card_id
 
         if not attachment:
-            raise HTTPException(status_code=404, detail='Вложение не найдено')
+            raise HTTPException(status_code=404, detail='Вложение не найдено.')
         
         if attachment.file_path and os.path.exists(attachment.file_path):
             try:
                 if attachment.file_path and os.path.exists(attachment.file_path):
                     os.remove(attachment.file_path)
-                    logger.info(f"Файл успешно удален: {attachment.file_path}")
+                    logger.info(f"Attachment successfully deleted: {attachment.file_path}")
                 else:
-                    logger.warning(f"Файл не найден на диске, пропускаем удаление файла: {attachment.file_path}")
+                    logger.warning(f"File nou found. Skip deleting file: {attachment.file_path}")
             except Exception as e:
-                logger.error(f"Ошибка при удалении файла {attachment.file_path}: {e}")
+                logger.error(f"Error while deleting file {attachment.file_path}: {e}")
+
+        updated_card = await self.repo.get_by_id(card_id)
+        out = CardOut.model_validate(updated_card)
+        payload = out.model_dump(mode='json')
+        await manager.publish('card_updated', str(card_id), payload)
 
         await self.repo.delete_attachment(attachment_id)
         await self.session.commit()

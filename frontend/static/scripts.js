@@ -1192,6 +1192,7 @@ async function submitCard() {
   }
   if (result) document.getElementById('modal-card').close();
   toast.success(editId ? 'Задача обновлена' : 'Задача создана');
+  renderBoard();
 }
  
 async function deleteCard(id) {

@@ -28,7 +28,7 @@ class UserService:
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail='Username already taken',
+                detail='Имя пользователя должно быть уникальныи. Такой пользователь уже существует.',
             )
         pw_hash = hash_password(data.password)
         user = await self.repo.create(data.username, password_hash=pw_hash)
@@ -52,7 +52,7 @@ class UserService:
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid username or password",
+                detail="Неправильное имя пользователя или пароль.",
             )
 
         if user.password_hash is None:
@@ -63,7 +63,7 @@ class UserService:
             if not verify_password(data.password, user.password_hash):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid username or password",
+                    detail="Неправильное имя пользователя или пароль.",
                 )
             
         user = await self.repo.set_online(user, True)

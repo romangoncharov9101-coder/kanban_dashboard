@@ -35,7 +35,7 @@ class ColumnService:
     async def update(self, column_id: uuid.UUID, data: ColumnUpdate) -> ColumnOut:
         col = await self.repo.get_by_id(column_id)
         if not col:
-            raise HTTPException(status_code=404, detail='Column not found')
+            raise HTTPException(status_code=404, detail='Колонка не найдена.')
         
         updates: dict = {}
         if data.name is None:
@@ -72,13 +72,13 @@ class ColumnService:
     async def delete(self, column_id: uuid.UUID) -> None:
         col = await self.repo.get_by_id(column_id)
         if not col:
-            raise HTTPException(status_code=404, detail="Column not found")
+            raise HTTPException(status_code=404, detail="Колонка не найдена.")
         
         card_count = await self.repo.count_card_in_column(column_id)
         if card_count > 0:
             raise HTTPException(
                 status_code=409,
-                detail="Cannot delete column with cards. Move or delete cards first.",
+                detail="Невозможно удалить колонку с карточками. Переместите или удалите карточки сначала.",
             )
         
         await self.repo.delete(col)
