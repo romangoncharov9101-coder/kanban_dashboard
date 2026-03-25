@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TaskBoard MVP</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="./static/scripts.js"></script>
+  <script src="./static/scripts.js?v=1.0.2"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; }
@@ -97,11 +97,39 @@
       <button onclick="doRegister()"
         class="bg-emerald-600 text-white px-2.5 py-1.5 rounded text-sm hover:bg-emerald-700 whitespace-nowrap">Регистр.</button>
     </div>
-    <!-- User info -->
-    <div id="user-info" class="hidden items-center gap-2 text-sm text-slate-600">
-      <span class="font-semibold text-slate-800">👤 <span id="current-username"></span></span>
+    <!-- Sorting, filtering and User info -->
+    <div id="user-info" class="hidden items-center gap-3 text-sm text-slate-600">
+      <div class="flex items-center gap-2 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
+        <label for="filter-select" class="text-[10px] uppercase font-bold text-slate-400 ml-1">Фильтр:</label>
+        <select id="filter-select" onchange="changeFilterMode(this.value)" 
+          class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
+          <option value="all">Все задачи</option>
+          <option value="my" title="Двойное нажатие клавиши пробел для быстрой активации.">Мои задачи</option>
+          <option value="created">Созданные мной</option>
+          <option disabled>─── По приоритету ───</option>
+          <option value="p-high">Высокий</option>
+          <option value="p-medium">Средний</option>
+          <option value="p-low">Низкий</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-2 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
+        <label for="sort-select" class="text-[10px] uppercase font-bold text-slate-400 ml-1">Сортировка:</label>
+        <select id="sort-select" onchange="changeSortMode(this.value)" 
+          class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
+          <option value="position">По позициям</option>
+          <option value="priority">По приоритету</option>
+          <option value="deadline">По дедлайну</option>
+        </select>
+      </div>
+
+      <span class="h-4 w-[1px] bg-slate-200 mx-1"></span>
+
+      <span class="font-semibold text-slate-800 flex items-center gap-1.5">
+        <span class="bg-indigo-100 text-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-[10px]">👤</span>
+        <span id="current-username"></span>
+      </span>
       <button onclick="doLogout()"
-        class="text-xs text-slate-400 hover:text-red-500 border rounded px-2 py-1">Выйти</button>
+        class="text-xs text-slate-400 hover:text-red-500 border border-slate-200 rounded px-2 py-1 transition-colors bg-white">Выйти</button>
     </div>
   </div>
 </header>
@@ -203,6 +231,24 @@
             class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 нед</button>
           <button type="button" onclick="setDeadlinePreset(30)"
             class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 мес</button>
+        </div>
+      </div>
+      <!--Select priority-->
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Приоритет</label>
+        <div class="grid grid-cols-3 gap-2">
+          <label class="cursor-pointer">
+            <input type="radio" name="card-priority" value="LOW" class="peer hidden" checked>
+            <div class="text-center py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 peer-checked:bg-slate-100 peer-checked:border-slate-400 peer-checked:text-slate-900 transition-all">Низкий</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-priority" value="MEDIUM" class="peer hidden">
+            <div class="text-center py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 peer-checked:bg-amber-50 peer-checked:border-amber-400 peer-checked:text-amber-700 transition-all">Средний</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-priority" value="HIGHT" class="peer hidden">
+            <div class="text-center py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 peer-checked:bg-red-50 peer-checked:border-red-400 peer-checked:text-red-700 transition-all">Высокий</div>
+          </label>
         </div>
       </div>
  

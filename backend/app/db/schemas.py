@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Optional, Any
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
 from uuid import UUID
 import re
 
@@ -31,6 +32,11 @@ class EventOut(BaseModel):
 #======================================================
 # Cards
 #======================================================
+class CardPriority(str, Enum):
+    HIGHT = "HIGHT"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
 class CardCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
@@ -38,11 +44,12 @@ class CardCreate(BaseModel):
     assigned_to: UUID | None = None
     created_by: UUID
     deadline: datetime | None = None
+    priority: CardPriority = CardPriority.LOW
 
     @field_validator('title')
     @classmethod
-    def validate_username(cls, v: str):
-        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+    def validate_title(cls, v: str):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
             raise ValueError('Название карточки может содержать только латинские или кирилические буквы без пробелов и знаков')
         return v
     
@@ -64,6 +71,7 @@ class CardUpdate(BaseModel):
     column_id: UUID | None = None
     assigned_to: UUID | None = None
     deadline: datetime | None = None
+    priority: CardPriority | None = None
 
     @field_validator('deadline')
     @classmethod
@@ -86,12 +94,12 @@ class CardOut(BaseModel):
     assigned_to: UUID | None
     created_by: UUID
     position: int
+    priority: CardPriority
+
     created_at: datetime
     updated_at: datetime | None
-
     deadline: datetime | None = None
     attachments: list[AttachmentOut] = []
-
     created_by_username: str | None = None
     assigned_to_username: str | None = None
 
@@ -113,7 +121,7 @@ class ColumnCreate(BaseModel):
     @field_validator('name')
     @classmethod
     def validate_username(cls, v: str):
-        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
             raise ValueError('Название колонки может содержать только латинские или кирилические буквы без пробелов и знаков')
         return v
 
@@ -142,7 +150,7 @@ class UserRegisterRequest(BaseModel):
     @field_validator('username')
     @classmethod
     def validate_username(cls, v: str):
-        if not re.match(r'^[a-zA-Zа-яА-ЯёЁ0-9\s]+$', v):
+        if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
             raise ValueError('Никнейм может содержать только латинские или кирилические буквы без пробелов и знаков')
         return v
 

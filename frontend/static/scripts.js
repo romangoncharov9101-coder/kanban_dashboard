@@ -19,12 +19,17 @@ const remoteDrags = new Map();
 let pendingFiles = [];
 let pendingDeletions = [];
 const cardSortables = new Map();
+let currentSortMode = 'position';
+let currentFilterMode = 'all';
+let lastSpacePress = 0;
+const DOUBLE_PRESS_DELAY = 300;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOAST / ALERTS  — заменяем все alert() красивыми тостами
 // ─────────────────────────────────────────────────────────────────────────────
 // type: 'error' | 'warn' | 'success' | 'info'
-function showToast(message, type = 'info', duration = 4500) {
+function showToast(message, type = 'info', duration = 4500, quite = false) {
+  if (quite === true) return;
   const container = document.getElementById('toast-container');
   if (!container) return;
 
@@ -97,20 +102,34 @@ function _removeToast(toast) {
 // ─────────────────────────────────────────────────────────────────────────────
 // API helper
 // ─────────────────────────────────────────────────────────────────────────────
-async function api(method, path, body, quiet = false) {
+async function api(method, path, body, quite = false) {
   const opts = { method, credentials:'include', headers:{'Content-Type':'application/json'} };
   if (body !== undefined && method !== 'GET') opts.body = JSON.stringify(body);
 
   const res = await fetch(API+path, opts);
   if (res.status === 204) return null;
-  const json = await res.json();
+  // const json = await res.json();
+  let json = null;
+  const contentType = res.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+      try {
+          json = await res.json();
+      } catch (e) {
+          console.warn("Не удалось распарсить JSON", e);
+      }
+  }
 
   if (!res.ok) {
-    if (res.status === 401) _uiLoggedOut();
-    if (!quiet) {
+    if (res.status === 401) {
+      const wasLoggedIn = !!currentUser;
+      _uiLoggedOut();
+      if (!wasLoggedIn || quite) return null; 
+      return null;
+    }
+    if (!quite) {
         const errMsg = json?.error?.message || json?.detail?.[0]?.msg
                    || json?.detail || json?.message || `Ошибка ${res.status}`;
-        toast.error(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg));
+        toast.error(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg), quite);
       }
       return null;
   }
@@ -126,7 +145,7 @@ async function apiUpload(path, formData) {
 
   if(!res.ok) {
     const errMsg = json?.error?.message || json?.detail || `Ошибка ${res.status}`;
-    toast.error(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg));
+    toast.error(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg), quite=true);
     return null;
   }
   return json;
@@ -171,8 +190,8 @@ function esc(s) {
 // const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁ0-9\s]{1,100}$/;
 // const _cardTitleRe = /^[a-zA-Zа-яА-ЯёЁ0-9\s.,!?\-_]{1,200}$/;
 
-const _usernameRe = /^[a-zA-Zа-яА-ЯёЁ0-9]{1,100}$/;
-const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁ0-9\s]{1,100}$/;
+const _usernameRe = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9]{1,100}$/;
+const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]{1,100}$/;
  
 async function doRegister() {
   const u = document.getElementById('auth-username').value.trim();
@@ -203,11 +222,16 @@ async function doLogin() {
 async function doLogout() {
   await api('POST', '/users/logout');
   currentUser = null; columns = []; cards = []; onlineUsers = [];
+  _pendingEvents.clear();
+  if (_reloadTimer) { 
+    clearTimeout(_reloadTimer);
+    _reloadTimer = null; 
+  }
   _disconnectWS();
   document.getElementById('board').innerHTML = '';
   document.getElementById('online-users').innerHTML = '';
   _uiLoggedOut();
-  loadBoard();
+  await loadBoard();
 }
  
 async function _uiLoggedIn(user) {
@@ -218,12 +242,12 @@ async function _uiLoggedIn(user) {
   document.getElementById('current-username').textContent = currentUser.username;
   document.getElementById('btn-add-col').disabled = false;
   connectWS();
+  renderBoard();
 
   try {
     const status = await api('GET', '/notifications/check', undefined, true);
     if (status && status.has_new_tasks) showOfflineNotification();
   } catch {}
-  renderBoard();
 }
  
 function _uiLoggedOut() {
@@ -311,7 +335,7 @@ let _reloading = false;
 function schedulePartialReload(eventType) {
   _pendingEvents.add(eventType);
   if (_reloadTimer) return;
-  _reloadTimer = setTimeout(_flushReload, 50);
+  _reloadTimer = setTimeout(_flushReload, 10);
 }
  
 async function _flushReload() {
@@ -373,17 +397,27 @@ function _sendDragEvent(cardId, srcColId, curColId, curPos) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA LOADING
 // ─────────────────────────────────────────────────────────────────────────────
+// async function loadBoard() {
+//   if (!currentUser) return;
+//   const [cols, crds] = await Promise.all([
+//     api('GET', '/columns'),
+//     api('GET', '/cards'),
+//   ]);
+//   if (!cols || !crds ) return;
+//   columns = cols; cards = crds;
+//   _renderOnlineUsers();
+//   renderBoard();
+// }
+
 async function loadBoard() {
-  if (!currentUser) return;
-  const [cols, crds, onl] = await Promise.all([
-    api('GET', '/columns'),
-    api('GET', '/cards'),
-    api('GET', '/users/online'),
-  ]);
-  if (!cols || !crds || !onl) return;
-  columns = cols; cards = crds; onlineUsers = onl;
-  _renderOnlineUsers();
-  renderBoard();
+  const data = await api('GET', '/board/init');
+  columns = data.columns || [];
+  cards = data.cards || [];
+  onlineUsers = data.online_users || []
+
+  sessionStorage.setItem('last_board_state', JSON.stringify(data));
+
+  renderBoard()
 }
  
 async function _loadCards() {
@@ -425,18 +459,32 @@ function _renderOnlineUsers() {
 // RENDER
 // ─────────────────────────────────────────────────────────────────────────────
 function renderBoard() {
+  document.querySelectorAll('.card-list').forEach(c => c.innerHTML = '');
   if (boardSortable) { boardSortable.destroy(); boardSortable = null; }
   cardSortables.forEach(s => s.destroy()); cardSortables.clear();
  
   const board = document.getElementById('board');
   board.innerHTML = '';
+
+  const sorter = getCardSorted();
+  const filter = getCardFilter();
+  const sortedCols = [...columns].sort((a, b) => a.position - b.position);
+
+  sortedCols.forEach(col => {
+        const colCards = cards
+            .filter(c => c.column_id === col.id)
+            .filter(filter)
+            .sort(sorter);
+
+        board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
+    });
  
-  [...columns].sort((a, b) => a.position - b.position).forEach(col => {
-    const colCards = cards
-      .filter(c => c.column_id === col.id)
-      .sort((a, b) => a.position - b.position);
-    board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
-  });
+  // [...columns].sort((a, b) => a.position - b.position).forEach(col => {
+  //   const colCards = cards
+  //     .filter(c => c.column_id === col.id)
+  //     .sort((a, b) => a.position - b.position);
+  //   board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
+  // });
  
   _initBoardSortable();
   columns.forEach(col => _initCardSortable(col.id));
@@ -459,11 +507,6 @@ function _renderColumn(col, colCards) {
         ${ce ? `<button onclick="deleteColumn('${col.id}')"
           class="text-slate-400 hover:text-red-500 text-sm flex-shrink-0 ml-2" title="Удалить">✕</button>` : ''}
       </div>
-      <!-- Cards -->
-      <div class="card-list px-2 py-2 flex flex-col gap-2 flex-1 min-h-[48px]"
-           data-col-id="${col.id}">
-        ${colCards.map(c => _renderCard(c)).join('')}
-      </div>
       <!-- Add card -->
       ${ce ? `<div class="px-2 pb-2">
         <button onclick="openAddCard('${col.id}')"
@@ -472,6 +515,11 @@ function _renderColumn(col, colCards) {
           + Задача
         </button>
       </div>` : ''}
+      <!-- Cards -->
+      <div class="card-list px-2 py-2 flex flex-col gap-2 flex-1 min-h-[48px]"
+           data-col-id="${col.id}">
+        ${colCards.map(c => _renderCard(c)).join('')}
+      </div>
     </div>`;
 }
 
@@ -516,30 +564,41 @@ function _renderCard(c) {
   const assignee = c.assigned_to_username || null;
   const hasAttachments = c.attachments && c.attachments.length > 0;
 
-  // [EDITED] Показываем дату СОЗДАНИЯ (не обновления) — пользователь хочет видеть когда задача была создана
   const createdDate = new Date(c.created_at).toLocaleString([], {
     day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
   });
 
-  // [ADDED] Если есть дедлайн — показываем его отдельной строкой с датой
   const deadlineDate = c.deadline
     ? new Date(c.deadline).toLocaleString([], { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
     : null;
+
+  const priorityMap = {
+    'HIGHT': { color: 'bg-red-500', text: 'Высокий', bg: 'bg-red-50', textColor: 'text-red-700' },
+    'MEDIUM': { color: 'bg-amber-500', text: 'Средний', bg: 'bg-amber-50', textColor: 'text-amber-700' },
+    'LOW': { color: 'bg-slate-400', text: 'Низкий', bg: 'bg-slate-50', textColor: 'text-slate-600' }
+  };
+
+  const p = priorityMap[c.priority] || priorityMap['LOW'];
  
   return `
     <div class="card bg-white border border-slate-200 rounded-xl text-sm flex flex-col
-                overflow-hidden hover:shadow-md hover:-translate-y-px transition-all duration-150 group"
+                overflow-hidden hover:shadow-md hover:-translate-y-px transition-all duration-150 group relative"
          data-card-id="${c.id}" data-col-id="${c.column_id}"
          onclick="openEditCard('${c.id}')">
- 
+
+      <div class="absolute left-0 top-0 bottom-0 w-1 ${p.color}"></div>
+
       ${_previewImage(c.attachments)}
- 
-      <div class="px-3 pt-2.5 pb-2 flex flex-col gap-1.5">
- 
-        <!-- Title row -->
-        <div class="flex items-start justify-between gap-1">
-          <span class="font-semibold text-slate-800 text-[13px] leading-tight line-clamp-2 flex-1"
-                title="${esc(c.title)}">${esc(c.title)}</span>
+
+      <div class="pl-4 pr-3 pt-2.5 pb-2 flex flex-col gap-1.5"> <div class="flex items-start justify-between gap-1">
+          <div class="flex flex-col gap-1 flex-1">
+            <span class="inline-block w-fit px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${p.bg} ${p.textColor}">
+              ${p.text}
+            </span>
+            <span class="font-semibold text-slate-800 text-[13px] leading-tight line-clamp-2"
+                  title="${esc(c.title)}">${esc(c.title)}</span>
+          </div>
+
           ${currentUser ? `
           <div class="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                onclick="event.stopPropagation()">
@@ -559,13 +618,11 @@ function _renderCard(c) {
             </button>
           </div>` : ''}
         </div>
- 
+
         ${c.description ? `<p class="text-slate-500 text-[11px] line-clamp-2 leading-relaxed">${esc(c.description)}</p>` : ''}
- 
-        <!-- Deadline badge -->
+
         ${c.deadline ? `<div class="mt-0.5">${_deadlineBadge(c.deadline)}</div>` : ''}
- 
-        <!-- Meta row -->
+
         <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100 mt-0.5">
           <div class="flex flex-col gap-0.5 min-w-0">
             <span class="text-[10px] text-slate-400 truncate">✍ ${esc(creator)}</span>
@@ -589,18 +646,9 @@ function _renderCard(c) {
                   d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
               </svg>
             </span>`}
-            <!-- [EDITED] Показываем дату создания -->
             <span class="text-[10px] text-slate-400" title="Создана">📅 ${createdDate}</span>
           </div>
-        </div>
-
-        <!-- [ADDED] Дедлайн отдельной строкой под meta — только если задан -->
-        ${deadlineDate ? `
-        <div class="flex items-center justify-between pt-1 border-t border-slate-100">
-          <span class="text-[10px] text-slate-400">Дедлайн</span>
-          ${_deadlineBadge(c.deadline)}
-        </div>` : ''}
- 
+        </div> 
       </div>
     </div>`;
 }
@@ -905,6 +953,79 @@ function downloadAllAttachments() {
   if (!card) return;
   _downloadAttachments(card.attachments);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SORTING
+// ─────────────────────────────────────────────────────────────────────────────
+function changeSortMode(mode) {
+    currentSortMode = mode;
+    _saveUIState();
+
+    if (typeof renderBoard === 'function') {
+        renderBoard();
+    }
+}
+
+function getCardSorted() {
+  return (a, b) => {
+    if (currentSortMode === 'priority') {
+      const weights = {'HIGHT': 2, 'MEDIUM': 1, 'LOW': 0};
+      const diff = (weights[b.priority] || 0) - (weights[a.priority] || 0);
+      if (diff != 0) return diff;
+      return a.position - b.position;
+    }
+
+    if (currentSortMode === 'deadline') {
+      if (!a.deadline) return 1;
+      if (!b.deadline) return -1;
+      const diff = new Date(a.deadline) - new Date(b.deadline);
+      if (diff !== 0) return diff;
+      return a.position - b.position;
+    }
+    return a.position - b.position;
+  }
+}
+
+function _saveUIState() {
+  const state = {
+    sort: currentSortMode,
+    filter: currentFilterMode
+  };
+  sessionStorage.setItem('ui_settings', JSON.stringify(state));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTERING
+// ─────────────────────────────────────────────────────────────────────────────
+function changeFilterMode(mode) {
+  currentFilterMode = mode;
+  _saveUIState();
+  if (typeof renderBoard === 'function') {
+        renderBoard();
+    }
+}
+
+function getCardFilter() {
+  const meId = currentUser?.user_id;
+  return (card) => {
+    switch (currentFilterMode){
+      case 'all':
+        return true;
+      case 'my':
+        return card.assigned_to === meId;
+      case 'created':
+        return card.created_by === meId;
+      case 'p-high':
+        return card.priority === 'HIGHT';
+      case 'p-medium':
+        return card.priority === 'MEDIUM';
+      case 'p-low':
+        return card.priority === 'LOW';
+    }
+
+    return true;
+  }
+}
  
 // ─────────────────────────────────────────────────────────────────────────────
 // NOTIFICATIONS
@@ -1041,6 +1162,7 @@ function _initCardSortable(columnId) {
     group: 'cards',
     animation: 150,
     ghostClass: 'card-ghost', dragClass: 'card-drag', chosenClass: 'card-chosen',
+    disabled: !currentUser || currentFilterMode !== 'all',
     disabled: !currentUser,
  
     onStart(e) { cardId = e.item.dataset.cardId; srcColId = e.item.dataset.colId; },
@@ -1150,6 +1272,9 @@ function openAddCard(colId) {
   document.getElementById('card-desc-input').value = '';
   document.getElementById('card-assign-search').value = '';
   document.getElementById('card-assign-id').value = '';
+  const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
+  if (lowPriorityRadio) lowPriorityRadio.checked = true;
+
   clearDeadline();
   pendingFiles = [];
   _renderPendingList();
@@ -1167,6 +1292,11 @@ function openEditCard(cardId) {
   document.getElementById('card-desc-input').value = card.description || '';
   document.getElementById('card-assign-search').value = card.assigned_to_username || '';
   document.getElementById('card-assign-id').value = card.assigned_to || '';
+  
+  const priority = card.priority || "LOW";
+  const radioToSelect = document.querySelector(`input[name="card-priority"][value="${priority}"]`);
+  if (radioToSelect) radioToSelect.checked = true;
+
   const dlInput = document.getElementById('card-deadline-input');
   dlInput.value = card.deadline ? _toDatetimeLocal(card.deadline) : '';
   _updateDeadlineClearBtn();
@@ -1178,29 +1308,53 @@ function openEditCard(cardId) {
   setTimeout(() => document.getElementById('card-title-input').focus(), 50);
 }
 
+let lastSubmitTime = 0;
 async function submitCard() {
-  const editId     = document.getElementById('card-edit-id').value;
-  const colId      = document.getElementById('card-col-id').value;
-  const title      = document.getElementById('card-title-input').value.trim();
-  const desc       = document.getElementById('card-desc-input').value.trim();
-  const assigneeId = document.getElementById('card-assign-id').value.trim() || null;
-
-  if (!title) return toast.warn('Заголовок обязателен');
-
-  const deadlineRaw = document.getElementById('card-deadline-input').value;
-  let deadline = null;
-  if (deadlineRaw) {
-    deadline = _validateDeadline();
-    if (deadline === false) {
-      toast.error('Дедлайн должен быть позже текущего времени');
-      return;
+  const now = Date.now();
+    
+    if (now - lastSubmitTime < 2000) {
+        console.warn("Слишком быстрый повторный клик игнорирован");
+        return;
     }
-  }
 
-  const payload = { title, description: desc || null, assigned_to: assigneeId, deadline };
+  const btn = document.querySelector('#modal-card button[onclick="submitCard()"]');
+  if (!btn || btn.disabled) return;
+
+  lastSubmitTime = now;
+
+  const originalOnClick = btn.onclick;
+  btn.onclick = null; 
+  btn.disabled = true;
+
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="animate-spin inline-block mr-2">↻</span> Сохранение...';
+
+  try {
+    const editId     = document.getElementById('card-edit-id').value;
+    const colId      = document.getElementById('card-col-id').value;
+    const title      = document.getElementById('card-title-input').value.trim();
+    const desc       = document.getElementById('card-desc-input').value.trim();
+    const assigneeId = document.getElementById('card-assign-id').value.trim() || null;
+
+    if (!title) return toast.warn('Заголовок обязателен');
+
+    const deadlineRaw = document.getElementById('card-deadline-input').value;
+    let deadline = null;
+    if (deadlineRaw) {
+      deadline = _validateDeadline();
+      if (deadline === false) {
+        toast.error('Дедлайн должен быть позже текущего времени');
+        return;
+      }
+    }
+
+    const priorityElement = document.querySelector('input[name="card-priority"]:checked');
+    const priority = priorityElement ? priorityElement.value : 'LOW';
+
+    const payload = { title, description: desc || null, assigned_to: assigneeId, deadline, priority };
 
   let result;
-  try {
     if (editId) {
       if (pendingDeletions.length > 0) {
         for (const attachId of pendingDeletions) {
@@ -1214,16 +1368,20 @@ async function submitCard() {
       });
     }
 
-    if (result && result.id && pendingFiles.length > 0) {
-      await _flushPendingFiles(result.id); 
-    }
+    if (result) {    
+      document.getElementById('modal-card').close();
 
-    if (result) {
+      const matches = getCardFilter()(result);
+      if (!matches && !editId) {
+        toast.info('Карточка создана, но скрыта текущим фильтром', 5000);
+      }
+      
+      if (result && result.id && pendingFiles.length > 0) {
+        await _flushPendingFiles(result.id); 
+      }
+      
       pendingFiles = [];
       pendingDeletions = [];
-      
-      document.getElementById('modal-card').close();
-      toast.success(editId ? 'Задача обновлена' : 'Задача создана');
       
       renderBoard();
     }
@@ -1231,6 +1389,15 @@ async function submitCard() {
   } catch (error) {
     console.error('Ошибка при сохранении карточки или вложений:', error);
     toast.error('Произошла ошибка при сохранении');
+  } finally {
+    setTimeout(() => {
+      if (btn) {
+        btn.disabled = false;
+        btn.onclick = originalOnClick;
+        btn.innerHTML = originalText;
+        lastSubmitTime = 0; 
+      }
+    }, 1000);
   }
 }
  
@@ -1252,7 +1419,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.addEventListener('paste', (e) => {
     const modal = document.getElementById('modal-card');
-    // Срабатываем только если модал карточки открыт
     if (!modal || !modal.open) return;
     const items = Array.from(e.clipboardData?.items || []);
     const files = items
@@ -1265,11 +1431,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  window.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    if (e.code === 'Space') {
+      const now = Date.now();
+      
+      if (now - lastSpacePress < DOUBLE_PRESS_DELAY) {
+        const newMode = (currentFilterMode === 'my') ? 'all' : 'my';
+        const filterSelect = document.getElementById('filter-select');
+        if (filterSelect) filterSelect.value = newMode;
+        changeFilterMode(newMode);
+        showToast(newMode === 'my' ? "Режим: Только мои задачи" : "Режим: Все задачи", "info", 1000);
+        
+        lastSpacePress = 0;
+      } else {
+        lastSpacePress = now;
+      }
+    }
+  });
+
+  const savedUI = sessionStorage.getItem('ui_settings');
+  if (savedUI) {
+    try {
+      const { sort, filter } = JSON.parse(savedUI);
+      currentSortMode = sort || 'position';
+      currentFilterMode = filter || 'all';
+      
+      const sSelect = document.getElementById('sort-select');
+      const fSelect = document.getElementById('filter-select');
+      if (sSelect) sSelect.value = currentSortMode;
+      if (fSelect) fSelect.value = currentFilterMode;
+    } catch (e) {
+      console.warn("Ошибка восстановления настроек UI");
+    }
+  }
+
   const me = await api('GET', '/users/me', undefined, true);
-  if (me && me.user_id) {
-    await _uiLoggedIn(me);
-    await loadBoard();
-  } else {
+
+  try {
+    if (me && me.user_id) {
+      currentUser = me;
+      await _uiLoggedIn(me);
+
+      const cachedData = sessionStorage.getItem('last_board_state');
+      if (cachedData) {
+        try {
+          const data = JSON.parse(cachedData);
+          columns = data.columns || [];
+          cards = data.cards || [];
+          onlineUsers = data.online_users || [];
+          
+          renderBoard();
+          if (typeof _renderOnlineUsers === 'function') _renderOnlineUsers();
+        } catch (e) {
+          console.warn("Кеш пуст или поврежден");
+        }
+      }
+
+      await loadBoard();
+    } else {
+      sessionStorage.removeItem('last_board_state');
+      _uiLoggedOut();
+    }
+  } catch (err) {
     _uiLoggedOut();
   }
 });

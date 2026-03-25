@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Query, UploadFile, status, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.card_service import CardService
@@ -14,9 +14,10 @@ async def list_cards(
     column_id: uuid.UUID | None = Query(default=None),
     assigned_to: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    sort_by: str = Query('position', regex='^(position|priority|deadline)$'),
     current_user: User = Depends(get_current_user)
 ):
-    return await CardService(db).get_all(column_id=column_id, assigned_to=assigned_to)
+    return await CardService(db).get_all(column_id=column_id, assigned_to=assigned_to, sort_by=sort_by)
 
 @router.post('', response_model=CardOut, status_code=status.HTTP_201_CREATED)
 async def created_card(body: CardCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -46,8 +47,11 @@ async def download_attachment(
     db: AsyncSession = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
-    return await CardService(db).get_attachment_file_response(attachment_id)
+    response = await CardService(db).get_attachment_file_response(attachment_id)
+    response.headers["Cache-Control"] = "public, max-age=604800, immutable"
 
+    return response
+    
 @router.delete('/attachments/{attachment_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_attachment(attachment_id: uuid.UUID, db:AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await CardService(db).delete_attachment(attachment_id)

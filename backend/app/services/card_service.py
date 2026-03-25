@@ -34,9 +34,10 @@ class CardService:
     async def get_all(
             self,
             column_id: uuid.UUID | None = None,
-            assigned_to: uuid.UUID | None = None
+            assigned_to: uuid.UUID | None = None,
+            sort_by: str = 'position'
     ) -> list[CardOut]:
-        cards = await self.repo.get_all(column_id=column_id, assigned_to=assigned_to)
+        cards = await self.repo.get_all(column_id=column_id, assigned_to=assigned_to, sort_by=sort_by)
         return [CardOut.model_validate(c) for c in cards]
     
     async def create(self, data: CardCreate) -> CardOut:
@@ -57,7 +58,8 @@ class CardService:
             created_by=data.created_by,
             description=data.description,
             assigned_to=data.assigned_to,
-            deadline=data.deadline
+            deadline=data.deadline,
+            priority=data.priority
         )
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
@@ -101,6 +103,8 @@ class CardService:
             updates['description'] = None
         if 'deadline' in data.model_fields_set:
             updates['deadline'] = data.deadline
+        if data.priority is not None:
+            updates['priority'] = data.priority
  
         if data.assigned_to is not None:
             user = await self.user_repo.get_user_by_id(data.assigned_to)
@@ -281,7 +285,6 @@ class CardService:
         file_extension = os.path.splitext(file.filename)[1]
         unique_filename = f'{card_id}_{os.urandom(4).hex()}{file_extension}'
         file_path = os.path.join(UPLOAD_DIR, unique_filename)
-        unique_filename = f'{card_id}_{os.urandom(4).hex()}{file_extension}'
 
         with open(file_path, 'wb') as buffer:
             buffer.write(file_content)
@@ -316,15 +319,14 @@ class CardService:
         if not attachment:
             raise HTTPException(status_code=404, detail='Вложение не найдено.')
         
-        if attachment.file_path and os.path.exists(attachment.file_path):
-            try:
-                if attachment.file_path and os.path.exists(attachment.file_path):
-                    os.remove(attachment.file_path)
-                    logger.info(f"Attachment successfully deleted: {attachment.file_path}")
-                else:
-                    logger.warning(f"File nou found. Skip deleting file: {attachment.file_path}")
-            except Exception as e:
-                logger.error(f"Error while deleting file {attachment.file_path}: {e}")
+        try:
+            if attachment.file_path and os.path.exists(attachment.file_path):
+                os.remove(attachment.file_path)
+                logger.info(f"Attachment successfully deleted: {attachment.file_path}")
+            else:
+                logger.warning(f"File nou found. Skip deleting file: {attachment.file_path}")
+        except Exception as e:
+            logger.error(f"Error while deleting file {attachment.file_path}: {e}")
 
         updated_card = await self.repo.get_by_id(card_id)
         out = CardOut.model_validate(updated_card)

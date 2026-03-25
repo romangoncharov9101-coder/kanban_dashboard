@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Card, User, Attachment
+from app.db.models import Card, User, Attachment, CardPriority
 
 class CardRepository:
     def __init__(self, session: AsyncSession):
@@ -33,13 +33,21 @@ class CardRepository:
         card.assigned_to_username = row.assigned_to_username
         return card
 
-    async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None) -> list[Card]:
+    async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None, sort_by: str = 'position') -> list[Card]:
         q = self._get_base_query()
         if column_id:
             q = q.where(Card.column_id == column_id)
         if assigned_to:
             q = q.where(Card.assigned_to == assigned_to)
-        q = q.order_by(Card.column_id, Card.position)
+
+        match sort_by:
+            case 'priority':
+                q = q.order_by(Card.priority.desc(), Card.created_at.asc(), Card.position.asc())
+            case 'deadline':
+                q = q.order_by(Card.deadline.asc().nullslast(), Card.position.asc())
+            case _:
+                q = q.order_by(Card.column_id, Card.position)
+                
         result = await self.session.execute(q)
         return [self._map_row_to_card(row) for row in result.all()]
     
@@ -69,7 +77,8 @@ class CardRepository:
             created_by: uuid.UUID,
             description: str = None,
             assigned_to: uuid.UUID = None,
-            deadline: datetime = None
+            deadline: datetime = None,
+            priority: CardPriority = CardPriority.LOW
     ) -> Card:
         now = datetime.now(timezone.utc)
         card = Card(
@@ -81,6 +90,7 @@ class CardRepository:
             created_by=created_by,
             position=position,
             deadline=deadline,
+            priority=priority,
             created_at=now
         )
         self.session.add(card)

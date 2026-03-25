@@ -12,7 +12,7 @@ from app.exceptions import (
     validation_exception_handler,
     generic_exception_handler,
 )
-from app.api_routes import columns, cards, users, events, notifications
+from app.api_routes import columns, cards, users, events, notifications, board
 from app.router import router as ws_router
 from app.manager import manager
 from app.tasks import event_cleanup_task, session_cleanup_task
@@ -67,6 +67,7 @@ app.include_router(cards.router)
 app.include_router(users.router)
 app.include_router(events.router)
 app.include_router(notifications.router)
+app.include_router(board.router)
 app.include_router(ws_router)
 
 @app.get('/health', tags=['meta'])
@@ -85,7 +86,11 @@ frontend_path = os.path.join(root_dir, "frontend")
 
 print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
-app.mount("/static", StaticFiles(directory=os.path.join(frontend_path, "static")), name="static")
+class MyStaticFiles(StaticFiles):
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        return super().is_not_modified(response_headers, request_headers)
+
+app.mount("/static", StaticFiles(directory=os.path.join(frontend_path, "static"), html=True), name="static")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "attachments")
 os.makedirs(UPLOAD_DIR, exist_ok=True)

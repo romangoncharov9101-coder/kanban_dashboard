@@ -1,6 +1,7 @@
 import uuid
+import enum
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint
+from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.db.session import Base
@@ -25,6 +26,11 @@ class Column(Base):
 
     cards: Mapped[list['Card']] = relationship('Card', back_populates='column', lazy='select')
 
+class CardPriority(str, enum.Enum):
+    HIGHT = "HIGHT"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
 class Card(Base):
     __tablename__ = 'cards'
 
@@ -43,6 +49,7 @@ class Card(Base):
 
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attachments: Mapped[list['Attachment']] = relationship('Attachment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
+    priority: Mapped[CardPriority] = mapped_column(Enum(CardPriority, name="cardpriority", create_type=False), default=CardPriority.LOW, nullable=False, server_default='0')
 
     __table_args__ = (
         CheckConstraint('deadline >= created_at', name='check_deadline_future'),
