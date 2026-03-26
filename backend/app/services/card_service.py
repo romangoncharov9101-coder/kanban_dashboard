@@ -71,6 +71,7 @@ class CardService:
                 'payload': {
                     'card_title': card.title,
                     'from_user': creator.username if creator else 'System',
+                    'priority': card.priority,
                     'type': 'assigment'
                 }
             }
@@ -139,6 +140,7 @@ class CardService:
                 'payload': {
                     'card_title': card.title,
                     'from_user': updater.username if updater else 'System',
+                    'priority': card.priority,
                     'type': 'assigment'
                 }
             }
