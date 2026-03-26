@@ -28,7 +28,7 @@ const DOUBLE_PRESS_DELAY = 300;
 // TOAST / ALERTS  — заменяем все alert() красивыми тостами
 // ─────────────────────────────────────────────────────────────────────────────
 // type: 'error' | 'warn' | 'success' | 'info'
-function showToast(message, type = 'info', duration = 4500, quite = false) {
+function showToast(message, type = 'info', duration = 3000, quite = false) {
   if (quite === true) return;
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -418,11 +418,11 @@ async function loadBoard() {
   const data = await api('GET', '/board/init');
   columns = data.columns || [];
   cards = data.cards || [];
-  onlineUsers = data.online_users || []
+  onlineUsers = data.online_users || [];
 
   sessionStorage.setItem('last_board_state', JSON.stringify(data));
 
-  renderBoard()
+  renderBoard();
 }
  
 async function _loadCards() {
@@ -1179,7 +1179,6 @@ async function showOfflineNotification() {
     _removeToast(t);
   };
  
-  // t.appendChild(row); t.appendChild(btn);
   actions.appendChild(btnShow);
   actions.appendChild(btnOk);
   t.appendChild(actions);
@@ -1419,6 +1418,8 @@ async function submitCard() {
     const assigneeId = document.getElementById('card-assign-id').value.trim() || null;
 
     if (!title) return toast.warn('Заголовок обязателен');
+    if (!_colNameRe.test(title)) return toast.warn('Название: только буквы, цифры и пробелы');
+
 
     const deadlineRaw = document.getElementById('card-deadline-input').value;
     let deadline = null;
