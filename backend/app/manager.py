@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from fastapi import WebSocket
+from typing import Any
 from app.core.logging import get_logger
 
 logger = get_logger('wbsocket.manager')
@@ -65,7 +66,7 @@ class ConnectionManager:
             message = await self.broadcast_queue.get()
             await self.broadcast(message)
 
-    async def publish(self, event: str, entity_id: str | None, payload: str) -> None:
+    async def publish(self, event: str, entity_id: str | None, payload: Any) -> None:
         msg = {
             'event': event,
             'entity_id': entity_id,

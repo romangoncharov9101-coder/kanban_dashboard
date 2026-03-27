@@ -6,7 +6,7 @@ from app.repositories.column_repo import ColumnRepository
 from app.repositories.event_repo import EventRepository
 from app.repositories.user_repo import UserRepository
 from app.repositories.notif_repo import NotificationRepository
-from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut
+from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut, CommentOut
 from app.db.models import Attachment
 from app.manager import manager
 from app.core.logging import get_logger
@@ -31,6 +31,9 @@ class CardService:
         self.user_repo = UserRepository(session)
         self.notif_repo = NotificationRepository(session)
 
+    #======================================================
+    # Cards
+    #======================================================
     async def get_all(
             self,
             column_id: uuid.UUID | None = None,
@@ -241,6 +244,9 @@ class CardService:
         logger.info(f'Card moved: {card_id} → column {data.target_column_id} pos {card.position}')
         return out
     
+    #======================================================
+    # Attachments
+    #======================================================
     async def get_attachment(self, attachment_id: uuid.UUID) -> Attachment:
         stmt = select(Attachment).where(Attachment.id == attachment_id)
         result = await self.session.execute(stmt)
@@ -338,3 +344,65 @@ class CardService:
         await self.repo.delete_attachment(attachment_id)
         await self.session.commit()
         return {'status': 'success'}
+    
+    #======================================================
+    # Comments
+    #======================================================
+    async def add_comment(self, card_id: uuid.UUID, user_id:uuid.UUID, text: str) -> CommentOut:
+        card = await self.repo.get_by_id(card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
+        
+        comment = await self.repo.add_comment(card_id, user_id, text)
+        out = CommentOut.model_validate(comment)
+        payload = out.model_dump(mode='json')
+
+        await self.event_repo.create('comment_created', payload, str(card_id))
+        await manager.publish('comment_created', str(card_id), payload)
+        await self.session.commit()
+        logger.info(f'Comment {comment.id} added to card {card_id} by user {user_id}')
+        return out
+    
+    async def edit_comment(self, comment_id: uuid.UUID, user_id: uuid.UUID, new_text: str) -> CommentOut:
+        comment = await self.repo.get_comment_by_id(comment_id)
+        if not comment:
+            raise HTTPException(status_code=404, detail='Комментарий не существует.')
+        
+        if str(comment.user_id) != str(user_id):
+            logger.warnning(f'User {user_id} tried to edit comment {comment_id} owned by {comment.user_id}')
+            raise HTTPException(status_code=405, detail='Вы не можете редактировать чужой комментарий.')
+        
+        updated_comment = await self.repo.edit_comment(comment_id, new_text)
+        out = CommentOut.model_validate(updated_comment)
+        payload = out.model_dump(mode='json')
+
+        await self.event_repo.create('comment_updated', payload, str(comment.card_id))
+        await manager.publish('comment_updated', str(comment.card_id), payload)
+
+        await self.session.commit()
+        logger.info(f"Comment {comment_id} updated by user {user_id}")
+        return out
+    
+    async def delete_comments(self, comment_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        comment = await self.repo.get_comment_by_id(comment_id)
+        if not comment:
+            raise HTTPException(status_code=404, detail='Комментарий не существует.')
+        
+        if str(comment.user_id) != str(user_id):
+            logger.warnning(f'User {user_id} tried to edit comment {comment_id} owned by {comment.user_id}')
+            raise HTTPException(status_code=405, detail='Вы не можете удалить чужой комментарий.')
+        
+        card_id = comment.card_id
+        await self.repo.delete_comment(comment)
+        payload = {'id': str(comment_id), 'card_id': str(card_id)}
+        
+        await self.event_repo.create('comment_deleted', payload, str(card_id))
+        await manager.publish('comment_deleted', str(card_id), payload)
+        await self.session.commit()
+        logger.info(f"Comment {comment_id} deleted by user {user_id}")
+        return {"status": "success"}
+    
+    async def get_comments(self, card_id: uuid.UUID, last_id: uuid.UUID | None = None) -> list[CommentOut]:
+        comments = await self.repo.get_comments_paginated(card_id, last_id)
+        return [CommentOut.model_validate(c) for c in comments]
+

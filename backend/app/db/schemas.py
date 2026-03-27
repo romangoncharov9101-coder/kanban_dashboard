@@ -30,6 +30,32 @@ class EventOut(BaseModel):
     model_config = {'from_attributes': True}
 
 #======================================================
+# Comments
+#======================================================
+class UserShortOut(BaseModel):
+    user_id: UUID
+    username: str
+
+    model_config = {'from_attributes': True}
+
+class CommentCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=400)
+
+class CommentUpdate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+
+class CommentOut(BaseModel):
+    id: UUID
+    text: str
+    card_id: UUID
+    user_id: UUID
+    author: UserShortOut
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {'from_attributes': True}
+
+#======================================================
 # Cards
 #======================================================
 class CardPriority(str, Enum):
@@ -100,6 +126,7 @@ class CardOut(BaseModel):
     updated_at: datetime | None
     deadline: datetime | None = None
     attachments: list[AttachmentOut] = []
+    comments_count: int = 0
     created_by_username: str | None = None
     assigned_to_username: str | None = None
 
@@ -111,6 +138,9 @@ class CardOut(BaseModel):
         return v
 
     model_config = {'from_attributes': True}
+
+class DetailedOut(CardOut):
+    comments: list[CommentOut] = []
 
 #======================================================
 # Columns

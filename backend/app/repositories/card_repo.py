@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Card, User, Attachment, CardPriority
+from app.db.models import Card, User, Attachment, CardPriority, Comment
 
 class CardRepository:
     def __init__(self, session: AsyncSession):
@@ -16,11 +16,16 @@ class CardRepository:
         return select(
             Card,
             Creator.username.label('created_by_username'),
-            Assignee.username.label('assigned_to_username')
+            Assignee.username.label('assigned_to_username'),
+            func.count(Comment.id).label('comments_count')
         ).join(
             Creator, Card.created_by == Creator.user_id
         ).outerjoin(
             Assignee, Card.assigned_to == Assignee.user_id
+        ).outerjoin(
+            Comment, Card.id == Comment.card_id
+        ).group_by(
+            Card.id, Creator.username, Assignee.username
         ).options(
             selectinload(Card.attachments)
         )
@@ -31,8 +36,12 @@ class CardRepository:
         card = row.Card
         card.created_by_username = row.created_by_username
         card.assigned_to_username = row.assigned_to_username
+        card.comments_count = row.comments_count
         return card
 
+    #======================================================
+    # Cards
+    #======================================================
     async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None, sort_by: str = 'position') -> list[Card]:
         q = self._get_base_query()
         if column_id:
@@ -109,6 +118,9 @@ class CardRepository:
         await self.session.delete(card)
         await self.session.flush()
 
+    #======================================================
+    # Validate positions in Column
+    #======================================================
     async def normalize_position_in_column(self, column_id: uuid.UUID) -> None:
         cards = await self.get_by_column_ordered(column_id)
         for idx, card in enumerate(cards):
@@ -123,6 +135,9 @@ class CardRepository:
             .values(position=Card.position + 1)
         )
 
+    #======================================================
+    # Attachments
+    #======================================================
     async def get_attachment_by_id(self, attachment_id: uuid.UUID) -> Attachment:
         q = select(Attachment).where(Attachment.id == attachment_id)
         result = await self.session.execute(q)
@@ -148,3 +163,80 @@ class CardRepository:
         if attachment:
             await self.session.delete(attachment)
 
+    #======================================================
+    # Comments
+    #======================================================
+    async def add_comment(self, card_id: uuid.UUID, user_id: uuid.UUID, text: str) -> Comment:
+        comment = Comment(
+            id = uuid.uuid4(),
+            card_id=card_id,
+            user_id=user_id,
+            text=text,
+            created_at=datetime.now(timezone.utc)
+        )
+        self.session.add(comment)
+        await self.session.flush()
+
+        # Подгрузка автора
+        stmt = (
+            select(Comment)
+            .where(Comment.id == comment.id)
+            .options(selectinload(Comment.author))
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+    
+    async def edit_comment(self, comment_id: uuid.UUID, new_text: str) -> Comment:
+        stmt = (
+            select(Comment)
+            .where(Comment.id == comment_id)
+            .options(selectinload(Comment.author))
+        )
+        result = await self.session.execute(stmt)
+        comment = result.scalar_one_or_none()
+
+        if not comment:
+            return None
+        
+        comment.text = new_text
+        comment.updated_at = datetime.now(timezone.utc)
+
+        await self.session.flush()
+        await self.session.refresh(comment)
+
+        return comment
+
+    async def get_comments_paginated(self, card_id: uuid.UUID, last_comment_id: uuid.UUID | None = None, limit: int = 20) -> list[Comment]:
+        """Метод для ленивой подгрузки комментариев"""
+        q = (
+            select(Comment)
+            .where(Comment.card_id == card_id)
+            .options(selectinload(Comment.author))
+            .order_by(Comment.created_at.desc())
+        )
+        if last_comment_id:
+            ts_query = select(Comment.created_at).where(Comment.id == last_comment_id)
+            ts_result = await self.session.execute(ts_query)
+            last_ts = ts_result.scalar()
+
+            if last_ts:
+                q = q.where(Comment.created_at < last_ts)
+
+        q = q.limit(limit)
+        result = await self.session.execute(q)
+        return list(result.scalars().all())
+    
+    async def get_comment_by_id(self, comment_id: uuid.UUID) -> Comment | None:
+        q = select(Comment).where(Comment.id == comment_id).options(selectinload(Comment.author))
+        result = await self.session.execute(q)
+        return result.scalar_one_or_none()
+    
+    async def delete_comment(self, comment: Comment) -> None:
+        await self.session.delete(comment)
+        await self.session.flush()
+
+    async def get_comment_count(self, card_id: uuid.UUID) -> int:
+        result = await self.session.execute(
+            select(func.count(Comment.id)).where(Comment.card_id == card_id)
+        )
+        return result.scalar() or 0

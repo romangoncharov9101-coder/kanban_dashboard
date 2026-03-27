@@ -1,9 +1,9 @@
 import uuid
-from fastapi import APIRouter, Depends, Query, UploadFile, status, Response
+from fastapi import APIRouter, Body, Depends, Query, UploadFile, status, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.card_service import CardService
-from app.db.schemas import  CardCreate, CardUpdate, CardMoveRequest, CardOut, AttachmentOut
+from app.db.schemas import  CardCreate, CardUpdate, CardMoveRequest, CardOut, AttachmentOut, CommentOut, CommentCreate
 from app.core.deps import get_current_user
 from app.db.models import User
 
@@ -55,3 +55,28 @@ async def download_attachment(
 @router.delete('/attachments/{attachment_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_attachment(attachment_id: uuid.UUID, db:AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await CardService(db).delete_attachment(attachment_id)
+
+@router.get('/{card_id}/comments', response_model=list[CommentOut])
+async def create_comment(card_id: uuid.UUID, last_id: uuid.UUID | None = Query(None, description='ID для пагинации'), db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).get_comments(card_id, last_id)
+
+@router.post('/{card_id}/comments', response_model=CommentOut, status_code=status.HTTP_201_CREATED)
+async def add_comment(card_id: uuid.UUID, body: CommentCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).add_comment(card_id=card_id, user_id=current_user.user_id, text=body.text)
+
+@router.patch('/comments/{comment_id}', response_model=CommentOut)
+async def update_comment(
+    comment_id: uuid.UUID, 
+    text: str = Body(..., embed=True, min_length=1, max_length=1000), 
+    db: AsyncSession = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+    ):
+    return await CardService(db).edit_comment(
+        comment_id=comment_id,
+        user_id=current_user.user_id,
+        new_text=text
+    )
+
+@router.delete('/comment/{comment_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comment(comment_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).delete_comments(comment_id, current_user.user_id)

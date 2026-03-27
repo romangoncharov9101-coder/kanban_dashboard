@@ -51,6 +51,7 @@ class Card(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attachments: Mapped[list['Attachment']] = relationship('Attachment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
     priority: Mapped[CardPriority] = mapped_column(postgresql.ENUM(CardPriority, name="cardpriority"), default=CardPriority.LOW, nullable=False, server_default='LOW')
+    comments: Mapped[list['Comment']] = relationship('Comment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
 
     __table_args__ = (
         CheckConstraint('deadline >= created_at', name='check_deadline_future'),
@@ -68,6 +69,21 @@ class Attachment(Base):
 
     card: Mapped['Card'] = relationship('Card', back_populates='attachments')
 
+class Comment(Base):
+    __tablename__ = 'comments'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    card_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('cards.id', ondelete='CASCADE'), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('users.user_id', on_delete='CASCADE'), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    card: Mapped['Card'] = relationship('Card', back_populates='comments')
+    author: Mapped['User'] = relationship('User', lazy='selectin')
+
+    def __repr__(self) -> str:
+        return f'<Comment(id={self.id}, user_id={self.user_id}, card_id={self.card_id})>'
 
 class Event(Base):
     __tablename__ = 'events'

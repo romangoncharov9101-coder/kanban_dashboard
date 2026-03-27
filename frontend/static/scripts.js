@@ -15,14 +15,18 @@ let ws = null, wsTimer = null;
 let columns = [], cards = [], onlineUsers = [];
 let boardSortable = null;
 let searchTimeout = null;
-const remoteDrags = new Map();
 let pendingFiles = [];
 let pendingDeletions = [];
-const cardSortables = new Map();
 let currentSortMode = 'position';
 let currentFilterMode = 'all';
 let lastSpacePress = 0;
+let lastCommentId = null;
+let commentsHasMore = true;
+let isLoadingComments = false;
+const remoteDrags = new Map();
+const cardSortables = new Map();
 const DOUBLE_PRESS_DELAY = 300;
+const COMMENTS_LIMIT = 20;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOAST / ALERTS  — заменяем все alert() красивыми тостами
@@ -317,13 +321,34 @@ function connectWS() {
       }
       return;
     }
+    if (msg.event === 'comment_created') {
+      const payload = msg.payload;
+      const openCardId = document.getElementById('card-edit-id')?.value;
+      const newComment = payload.comment || payload;
+      
+      if (openCardId === payload.card_id || openCardId === newComment.card_id) {
+        const existing = document.querySelector(`.comment-item[data-id="${newComment.id}"]`);
+        if (!existing) {
+          _renderCommentsBatch([newComment], false);
+          
+          const list = document.getElementById('comments-list');
+          if (list) {
+              setTimeout(() => {
+                  list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+              }, 50);
+          }
+        }
+      }
+      schedulePartialReload(msg.event);
+    }
  
     logEvent(msg.event, JSON.stringify(msg.payload).substring(0, 120));
 
     switch (msg.event) {
-      case 'column_created': case 'column_updated': case 'column_deleted':
-      case 'card_created':   case 'card_updated':   case 'card_moved':   case 'card_deleted':
-      case 'user_online':    case 'user_offline':   case 'user_created':
+      case 'column_created':    case 'column_updated':    case 'column_deleted':
+      case 'card_created':      case 'card_updated':      case 'card_moved':   case 'card_deleted':
+      case 'user_online':       case 'user_offline':      case 'user_created':
+      case 'comment_created':   case 'comment_updated':   case 'comment_deleted':
         schedulePartialReload(msg.event);
         break;
     }
@@ -349,11 +374,14 @@ async function _flushReload() {
  
   const events = new Set(_pendingEvents);
   _pendingEvents.clear();
+
+  const needsComments = events.has('comment_created') || events.has('comment_updated') || events.has('comment_deleted');
  
   const needsFull    = events.has('user_created');
   const needsColumns = events.has('column_created') || events.has('column_updated') || events.has('column_deleted');
   const needsCards   = events.has('card_created')   || events.has('card_updated')   ||
-                       events.has('card_deleted')   || events.has('card_moved');
+                       events.has('card_deleted')   || events.has('card_moved')     ||
+                       needsComments;
   const needsOnline  = events.has('user_online')    || events.has('user_offline');
  
   _reloading = true;
@@ -362,6 +390,7 @@ async function _flushReload() {
     else if (needsColumns && needsOnline)     await Promise.all([_loadColumns(), _loadOnlineUsers()]);
     else if (needsColumns)                    await _loadColumns();
     else if (needsCards && needsOnline)       await Promise.all([_loadCards(), _loadOnlineUsers()]);
+    else if (needsCards)                      await _loadCards();
     else if (needsCards)                      await _loadCards();
     else if (needsOnline)                     await _loadOnlineUsers();
   } finally {
@@ -568,6 +597,7 @@ function _renderCard(c) {
   const creator  = c.created_by_username || '—';
   const assignee = c.assigned_to_username || null;
   const hasAttachments = c.attachments && c.attachments.length > 0;
+  const commentsCount = c.comments_count || 0;
 
   const createdDate = new Date(c.created_at).toLocaleString([], {
     day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
@@ -595,7 +625,8 @@ function _renderCard(c) {
 
       ${_previewImage(c.attachments)}
 
-      <div class="pl-4 pr-3 pt-2.5 pb-2 flex flex-col gap-1.5"> <div class="flex items-start justify-between gap-1">
+      <div class="pl-4 pr-3 pt-2.5 pb-2 flex flex-col gap-1.5"> 
+        <div class="flex items-start justify-between gap-1">
           <div class="flex flex-col gap-1 flex-1">
             <span class="inline-block w-fit px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${p.bg} ${p.textColor}">
               ${p.text}
@@ -633,25 +664,28 @@ function _renderCard(c) {
             <span class="text-[10px] text-slate-400 truncate">✍ ${esc(creator)}</span>
             ${assignee ? `<span class="text-[10px] text-indigo-500 font-medium truncate">👤 ${esc(assignee)}</span>` : ''}
           </div>
-          <div class="flex items-center gap-1.5 flex-shrink-0" onclick="event.stopPropagation()">
+          
+          <div class="flex items-center gap-1 flex-shrink-0">
+            <div class="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border border-transparent 
+                        ${commentsCount > 0 ? 'text-indigo-600 bg-indigo-50 border-indigo-100' : 'text-slate-300'}" 
+                 title="Комментарии: ${commentsCount}">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
+                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+              </svg>
+              <span class="text-[10px] font-bold">${commentsCount}</span>
+            </div>
+
             ${hasAttachments ? `
-            <button onclick="downloadAllAttachmentsFor('${c.id}')" title="Скачать вложения (${c.attachments.length})"
+            <button onclick="event.stopPropagation(); downloadAllAttachmentsFor('${c.id}')" title="Скачать вложения (${c.attachments.length})"
               class="text-[10px] text-slate-500 hover:text-indigo-600 flex items-center gap-0.5 border border-slate-200
-                     rounded-full px-1.5 py-0.5 hover:border-indigo-400 transition-colors">
+                     rounded-full px-1.5 py-0.5 hover:border-indigo-400 transition-colors bg-white">
               <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
               </svg>
               ${c.attachments.length}
-            </button>` : `
-            <span class="text-[10px] text-slate-300 border border-slate-100 rounded-full px-1.5 py-0.5
-                         cursor-not-allowed" title="Нет вложений">
-              <svg class="w-2.5 h-2.5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-              </svg>
-            </span>`}
-            <span class="text-[10px] text-slate-400" title="Создана">📅 ${createdDate}</span>
+            </button>` : ''}
           </div>
         </div> 
       </div>
@@ -1362,7 +1396,7 @@ function openAddCard(colId) {
   setTimeout(() => document.getElementById('card-title-input').focus(), 50);
 }
  
-function openEditCard(cardId) {
+async function openEditCard(cardId) {
   const card = cards.find(c => c.id === cardId);
   if (!card) return;
   document.getElementById('modal-card-title').textContent = 'Edit Card';
@@ -1384,8 +1418,49 @@ function openEditCard(cardId) {
   pendingFiles = [];
   pendingDeletions = [];
   _renderAttachmentsList(card.attachments || []);
+
+  lastCommentId = null;
+  commentsHasMore = true;
+  isLoadingComments = true;
+
+  const listContainer = document.getElementById('comments-list');
+  const listLabel = document.getElementById('comments-label');
+  
+  listContainer.innerHTML = ''; 
+  listContainer.classList.add('hidden');
+  listLabel.classList.add('hidden');
+  listLabel.textContent = 'Комментарии';
+
+  document.getElementById('comments-section').classList.remove('hidden');
   document.getElementById('modal-card').showModal();
-  setTimeout(() => document.getElementById('card-title-input').focus(), 50);
+
+  try {
+    const data = await api('GET', `/cards/${cardId}/comments`, undefined, true);
+    if (data && data.length > 0) {
+      listLabel.textContent = 'Комментарии';
+      listLabel.classList.remove('hidden');
+      listContainer.classList.remove('hidden');
+
+      const chronological = [...data].reverse();
+      _renderCommentsBatch(chronological, false);
+      lastCommentId = data[data.length - 1].id;
+      refreshCommentsUI();
+      if (data.length < COMMENTS_LIMIT) commentsHasMore = false;
+
+
+      requestAnimationFrame(() => {
+        listContainer.style.scrollBehavior = 'auto';
+        listContainer.scrollTop = listContainer.scrollHeight;
+      });
+    } else {
+      listLabel.textContent = 'Нет комментариев';
+      listLabel.classList.remove('hidden');
+      listContainer.classList.add('hidden');
+      commentsHasMore = false;
+    }
+  } finally {
+    isLoadingComments = false;
+  }
 }
 
 let lastSubmitTime = 0;
@@ -1443,6 +1518,7 @@ async function submitCard() {
           await api('DELETE', `/cards/attachments/${attachId}`);
         }
       }
+      console.log(payload)
       result = await api('PUT', `/cards/${editId}`, payload);
     } else {
       result = await api('POST', '/cards', {
@@ -1487,7 +1563,243 @@ async function deleteCard(id) {
   if (!confirm('Удалить карточку?')) return;
   await api('DELETE', `/cards/${id}`);
 }
- 
+
+function refreshCommentsUI() {
+    const listContainer = document.getElementById('comments-list');
+    const listLabel = document.getElementById('comments-label');
+    if (!listContainer || !listLabel) return;
+
+    const count = listContainer.querySelectorAll('.comment-item').length;
+
+    if (count > 0) {
+        listLabel.textContent = 'Комментарии';
+        listContainer.classList.add('bg-slate-50/50', 'rounded-xl', 'border', 'border-slate-100', 'p-3', 'mb-4', 'max-h-[280px]', 'overflow-y-auto', 'thin-scroll', 'space-y-3', 'shadow-inner');
+        listContainer.classList.remove('hidden');
+        listContainer.style.display = '';
+    } else {
+        listLabel.textContent = 'Нет комментариев';
+        listContainer.classList.remove('bg-slate-50/50', 'rounded-xl', 'border', 'border-slate-100', 'p-3', 'mb-4', 'max-h-[280px]', 'overflow-y-auto', 'thin-scroll', 'space-y-3', 'shadow-inner');
+        listContainer.classList.add('hidden');
+        listContainer.style.display = 'none';
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEZY COMMENTS LOGIC
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadMoreComments(cardId) {
+  if (isLoadingComments || !commentsHasMore) return;
+  isLoadingComments = true;
+  const listContainer = document.getElementById('comments-list');
+
+  const oldScrollHeight = listContainer.scrollHeight;
+  const oldScrollTop = listContainer.scrollTop;
+
+  try {
+    const data = await api('GET', `/cards/${cardId}/comments?last_id=${lastCommentId}`, undefined, true);
+
+    if (data && data.length > 0) {
+      if (data.length < COMMENTS_LIMIT) {
+        commentsHasMore = false;
+      }
+      
+      const chronological = [...data].reverse();
+      _renderCommentsBatch(chronological, true);
+      
+      lastCommentId = data[data.length - 1].id; 
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          listContainer.scrollTop = oldScrollTop + (listContainer.scrollHeight - oldScrollHeight);
+        });
+      });
+    } else {
+      commentsHasMore = false;
+    }
+  } finally {
+    isLoadingComments = false;
+  }
+}
+
+function _renderCommentsBatch(batch, isPrepend = false) {
+  const container = document.getElementById('comments-list');
+  if (!container) return;
+
+  const html = batch.map(comment => {
+    const date = new Date(comment.created_at).toLocaleString([], {
+        day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
+    });
+    const authorName = (comment.author && comment.author.username) 
+                           || comment.username 
+                           || 'Аноним';
+
+    const authorId = comment.user_id || (comment.author && comment.author.id);
+    const isMyComment = currentUser && String(authorId) === String(currentUser.user_id);
+    return `
+      <div class="comment-item bg-white p-3 rounded-lg border border-slate-100 shadow-sm group" data-id="${comment.id}">
+        <div class="flex justify-between items-center mb-1">
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-xs text-indigo-600">${esc(authorName)}</span>
+            <span class="text-[10px] text-slate-400">${date}</span>
+          </div>
+          
+          ${isMyComment ? `
+          <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onclick="prepareEditComment('${comment.id}')" class="p-1 text-slate-400 hover:text-indigo-600 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+            </button>
+            <button onclick="deleteCommentAction('${comment.id}')" class="p-1 text-slate-400 hover:text-red-600 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
+          ` : ''}
+        </div>
+        <div class="comment-content text-sm text-slate-700 whitespace-pre-wrap break-words">${esc(comment.text)}</div>
+      </div>
+    `;
+  }).join('');
+
+  if (isPrepend) {
+    container.insertAdjacentHTML('afterbegin', html);
+  } else {
+    container.insertAdjacentHTML('beforeend', html);
+  }
+}
+
+async function addCommentAction() {
+  const cardId = document.getElementById('card-edit-id').value;
+  const input = document.getElementById('card-new-comment');
+  const text = input.value.trim();
+
+  if (!cardId || !text) return;
+
+  const res = await api('POST', `/cards/${cardId}/comments`, {text});
+  if (res) {
+    input.value = '';
+
+    const newCommentForUI = {
+        ...res,
+        author: res.author || { username: currentUser.username }
+    };
+
+    refreshCommentsUI();
+
+    const list = document.getElementById('comments-list');
+    list.scrollTo({top: list.scrollHeight, behavior: 'smooth'});
+    const badge = document.getElementById('comments-count-badge');
+    badge.innerText = parseInt(badge.innerText || 0) + 1;
+  }
+}
+
+async function deleteCommentAction(commentId) {
+  if (!confirm('Удалить этот комментарий')) return;
+
+  try {
+    const res = await api('DELETE', `/cards/comment/${commentId}`)
+    const el = document.querySelector(`.comment-item[data-id="${commentId}"]`);
+    if (el) {
+      el.remove();
+      refreshCommentsUI();
+    };
+    toast.success('Комментарий удален')
+  } catch (err) {
+    toast.error('Не удалось удалить комментарий')
+  }
+}
+
+function prepareEditComment(commentId) {
+  const item = document.querySelector(`.comment-item[data-id="${commentId}"]`);
+  const contentDiv = item.querySelector('.comment-content');
+  const oldText = contentDiv.innerText;
+
+  contentDiv.innerHTML = `
+    <textarea class="edit-comment-area w-full p-2 border border-indigo-300 rounded-md text-sm focus:outline-none resize-none no-scrollbar">${esc(oldText)}</textarea>
+    <div class="flex justify-end gap-2 mt-2">
+      <button onclick="cancelEditComment('${commentId}', \`${esc(oldText)}\`)" class="text-[10px] text-slate-500 hover:underline">Отмена</button>
+      <button onclick="saveEditComment('${commentId}')" class="text-[10px] text-indigo-600 font-bold hover:underline">Сохранить</button>
+    </div>
+  `;
+  
+  const textarea = contentDiv.querySelector('textarea');
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function cancekEditComment(commentId, oldText) {
+  const item = document.querySelector(`.comment-item[data-id="${commentId}"]`);
+  item.querySelector('.comment-content').innerText = oldText;
+}
+
+async function saveEditComment(commentId) {
+  const item = document.querySelector(`.comment-item[data-id="${commentId}"]`);
+  const textarea = item.querySelector('.edit-comment-area');
+  const newText = textarea.value.trim();
+
+  if (!newText) return;
+
+  try {
+    const res = await api('PATCH', `/cards/comments/${commentId}`, { text: newText });
+    
+    if (res) {
+      item.querySelector('.comment-content').innerText = res.text;
+      toast.success('Изменено');
+    }
+  } catch (err) {
+    toast.error('Ошибка при сохранении');
+  }
+}
+
+function toggleEmojiPicker() {
+  let picker = document.getElementById('emoji-picker');
+  
+  if (!picker) {
+    picker = document.createElement('div');
+    picker.id = 'emoji-picker';
+    picker.className = 'absolute bottom-full right-0 mb-2 bg-white border border-slate-200 shadow-xl rounded-lg p-2 grid grid-cols-6 gap-1 z-50';
+    
+    const emojis = ['👍', '❤️', '🔥', '✅', '🚀', '⭐', '👀', '🙌', '💡', '🤔', '❌', '💯'];
+    
+    picker.innerHTML = emojis.map(e => `
+      <button type="button" onclick="insertEmoji('${e}')" 
+              class="hover:bg-slate-100 p-1.5 rounded text-lg transition-colors">
+        ${e}
+      </button>
+    `).join('');
+  
+    const btn = event.currentTarget;
+    btn.parentElement.classList.add('relative');
+    btn.parentElement.appendChild(picker);
+  } else {
+    picker.classList.toggle('hidden');
+  }
+
+  const closePicker = (e) => {
+    if (!picker.contains(e.target) && e.target !== document.querySelector('[onclick="toggleEmojiPicker()"]')) {
+      picker.classList.add('hidden');
+      document.removeEventListener('click', closePicker);
+    }
+  };
+  
+  if (!picker.classList.contains('hidden')) {
+    setTimeout(() => document.addEventListener('click', closePicker), 10);
+  }
+}
+
+function insertEmoji(emoji) {
+  const input = document.getElementById('card-new-comment');
+  if (input) {
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const text = input.value;
+    input.value = text.substring(0, start) + emoji + text.substring(end);
+    
+    input.focus();
+    input.setSelectionRange(start + emoji.length, start + emoji.length);
+  }
+  
+  document.getElementById('emoji-picker')?.classList.add('hidden');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1512,6 +1824,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       _processFiles(files);
     }
   });
+
+  const commentList = document.getElementById('comments-list');
+  if (commentList) {
+    commentList.addEventListener('scroll', () => {
+      const triggerThreshold = 400; 
+      if (commentList.scrollTop < triggerThreshold && commentsHasMore && !isLoadingComments) {
+        const cardId = document.getElementById('card-edit-id').value;
+        if (cardId) {
+          loadMoreComments(cardId);
+        }
+      }
+    });
+  }
 
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
