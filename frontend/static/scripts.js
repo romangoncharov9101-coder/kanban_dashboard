@@ -1389,6 +1389,9 @@ function openAddCard(colId) {
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
 
+  const listContainer = document.getElementById('comments-section');
+  listContainer.classList.add('hidden');
+
   clearDeadline();
   pendingFiles = [];
   _renderPendingList();
@@ -1423,15 +1426,19 @@ async function openEditCard(cardId) {
   commentsHasMore = true;
   isLoadingComments = true;
 
+  const listSection = document.getElementById('comments-section');
   const listContainer = document.getElementById('comments-list');
   const listLabel = document.getElementById('comments-label');
-  
-  listContainer.innerHTML = ''; 
+
+  listSection.classList.remove('hidden');
+  listContainer.innerHTML = '';
+
+  refreshCommentsUI();
+
   listContainer.classList.add('hidden');
   listLabel.classList.add('hidden');
   listLabel.textContent = 'Комментарии';
 
-  document.getElementById('comments-section').classList.remove('hidden');
   document.getElementById('modal-card').showModal();
 
   try {
@@ -1443,8 +1450,9 @@ async function openEditCard(cardId) {
 
       const chronological = [...data].reverse();
       _renderCommentsBatch(chronological, false);
-      lastCommentId = data[data.length - 1].id;
       refreshCommentsUI();
+
+      lastCommentId = data[data.length - 1].id;
       if (data.length < COMMENTS_LIMIT) commentsHasMore = false;
 
 
@@ -1518,7 +1526,6 @@ async function submitCard() {
           await api('DELETE', `/cards/attachments/${attachId}`);
         }
       }
-      console.log(payload)
       result = await api('PUT', `/cards/${editId}`, payload);
     } else {
       result = await api('POST', '/cards', {
@@ -1573,12 +1580,12 @@ function refreshCommentsUI() {
 
     if (count > 0) {
         listLabel.textContent = 'Комментарии';
-        listContainer.classList.add('bg-slate-50/50', 'rounded-xl', 'border', 'border-slate-100', 'p-3', 'mb-4', 'max-h-[280px]', 'overflow-y-auto', 'thin-scroll', 'space-y-3', 'shadow-inner');
+        listLabel.classList.remove('hidden');
         listContainer.classList.remove('hidden');
-        listContainer.style.display = '';
+        listContainer.style.display = 'block';
     } else {
         listLabel.textContent = 'Нет комментариев';
-        listContainer.classList.remove('bg-slate-50/50', 'rounded-xl', 'border', 'border-slate-100', 'p-3', 'mb-4', 'max-h-[280px]', 'overflow-y-auto', 'thin-scroll', 'space-y-3', 'shadow-inner');
+        listLabel.classList.remove('hidden');
         listContainer.classList.add('hidden');
         listContainer.style.display = 'none';
     }
@@ -1635,6 +1642,7 @@ function _renderCommentsBatch(batch, isPrepend = false) {
 
     const authorId = comment.user_id || (comment.author && comment.author.id);
     const isMyComment = currentUser && String(authorId) === String(currentUser.user_id);
+    
     return `
       <div class="comment-item bg-white p-3 rounded-lg border border-slate-100 shadow-sm group" data-id="${comment.id}">
         <div class="flex justify-between items-center mb-1">
@@ -1644,7 +1652,7 @@ function _renderCommentsBatch(batch, isPrepend = false) {
           </div>
           
           ${isMyComment ? `
-          <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div id="update-comment" class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button onclick="prepareEditComment('${comment.id}')" class="p-1 text-slate-400 hover:text-indigo-600 transition-colors">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
             </button>
@@ -1686,8 +1694,6 @@ async function addCommentAction() {
 
     const list = document.getElementById('comments-list');
     list.scrollTo({top: list.scrollHeight, behavior: 'smooth'});
-    const badge = document.getElementById('comments-count-badge');
-    badge.innerText = parseInt(badge.innerText || 0) + 1;
   }
 }
 
@@ -1712,6 +1718,9 @@ function prepareEditComment(commentId) {
   const contentDiv = item.querySelector('.comment-content');
   const oldText = contentDiv.innerText;
 
+  const btnEd = document.getElementById('update-comment')
+  btnEd.classList.add('hidden')
+
   contentDiv.innerHTML = `
     <textarea class="edit-comment-area w-full p-2 border border-indigo-300 rounded-md text-sm focus:outline-none resize-none no-scrollbar">${esc(oldText)}</textarea>
     <div class="flex justify-end gap-2 mt-2">
@@ -1725,15 +1734,21 @@ function prepareEditComment(commentId) {
   textarea.setSelectionRange(textarea.value.length, textarea.value.length);
 }
 
-function cancekEditComment(commentId, oldText) {
+function cancelEditComment(commentId, oldText) {
   const item = document.querySelector(`.comment-item[data-id="${commentId}"]`);
   item.querySelector('.comment-content').innerText = oldText;
+
+  const btnEd = document.getElementById('update-comment')
+  btnEd.classList.remove('hidden')
 }
 
 async function saveEditComment(commentId) {
   const item = document.querySelector(`.comment-item[data-id="${commentId}"]`);
   const textarea = item.querySelector('.edit-comment-area');
   const newText = textarea.value.trim();
+
+  const btnEd = document.getElementById('update-comment')
+  btnEd.classList.add('hidden')
 
   if (!newText) return;
 

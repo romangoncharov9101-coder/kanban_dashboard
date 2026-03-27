@@ -295,15 +295,8 @@
           <input type="hidden" id="card-assign-id" />
         </div>
       </div>
- 
-      <!-- ═══════════════════════════════════════════════
-           ВЛОЖЕНИЯ — показывается ВСЕГДА (и при создании, и при редактировании)
-           При создании файлы хранятся в pendingFiles и загружаются после сохранения карточки
-      ═══════════════════════════════════════════════ -->
       <div id="attachments-section">
         <label class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">Вложения</label>
-
-        <!-- DROP ZONE: перетянуть файл / нажать / вставить из буфера -->
         <div id="drop-zone"
           class="relative border-2 border-dashed border-slate-300 rounded-xl p-4
                  text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50
@@ -352,14 +345,14 @@
         </label>
         
         <div id="comments-list" 
-             class="hidden">
+             class="bg-slate-50/50 rounded-xl border border-slate-100 p-3 mb-4 max-h-[280px] overflow-y-auto thin-scroll space-y-3 shadow-inner">
           <p class="text-center text-slate-400 text-xs py-4">Нет комментариев</p>
         </div>
 
         <div class="relative group">
-          <textarea id="card-new-comment" rows="2" maxlength="400" 
+          <textarea id="card-new-comment" rows="2" maxlength="1000" 
             placeholder="Напишите комментарий..."
-            class="no-scrollbar border border-slate-300 rounded-xl w-full px-3 py-2 pr-12 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all shadow-sm border border-slate-300 transition-all shadow-sm group-hover:shadow-md group-hover:border-slate-400"
+            class="no-scrollbar border border-slate-300 rounded-xl w-full px-3 py-2 pr-20 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all shadow-sm border border-slate-300 transition-all shadow-sm group-hover:shadow-md group-hover:border-slate-400"
             onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); addCommentAction(); }"></textarea>
           
           <div class="absolute right-2 bottom-2 flex items-center gap-1">

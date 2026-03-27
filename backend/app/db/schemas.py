@@ -39,7 +39,7 @@ class UserShortOut(BaseModel):
     model_config = {'from_attributes': True}
 
 class CommentCreate(BaseModel):
-    text: str = Field(..., min_length=1, max_length=400)
+    text: str = Field(..., min_length=1, max_length=1000)
 
 class CommentUpdate(BaseModel):
     text: str = Field(..., min_length=1, max_length=1000)
