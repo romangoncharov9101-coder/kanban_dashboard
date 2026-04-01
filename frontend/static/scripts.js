@@ -27,6 +27,7 @@ let isLoadingComments = false;
 let lastEventId = null;
 let historyHasMore = true;
 let isLoadingHistory = false;
+let isDragging = false;
 const remoteDrags = new Map();
 const cardSortables = new Map();
 const DOUBLE_PRESS_DELAY = 300;
@@ -563,6 +564,8 @@ function renderBoard() {
     cardSortables.forEach(s => s.destroy());
     cardSortables.clear();
   }
+
+  updateColumnsVisibility();
 }
  
 function _renderColumn(col, colCards) {
@@ -570,7 +573,7 @@ function _renderColumn(col, colCards) {
   const isArchived = currentFilterMode === 'archived';
   const count = colCards.length;
   return `
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col
+    <div class="column bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col
                 sm:min-w-[290px] sm:max-w-[290px] w-full"
          data-column-id="${col.id}">
       <!-- Header -->
@@ -598,6 +601,31 @@ function _renderColumn(col, colCards) {
         ${colCards.map(c => _renderCard(c)).join('')}
       </div>
     </div>`;
+}
+
+function updateColumnsVisibility() {
+  const allColEls = document.querySelectorAll('[data-column-id]');
+  if (allColEls.length === 0) return;
+
+  const filterFn = getCardFilter();
+
+  const visibleCards = cards.filter(filterFn);
+
+  allColEls.forEach(colEl => {
+    const colId = colEl.getAttribute('data-column-id');
+    
+    const hasCards = visibleCards.some(c => String(c.column_id) === String(colId));
+
+    if (currentFilterMode === 'all') {
+      colEl.classList.remove('hidden');
+    } else {
+      if (hasCards) {
+        colEl.classList.remove('hidden');
+      } else {
+        colEl.classList.add('hidden');
+      }
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1127,8 +1155,8 @@ async function changeFilterMode(mode) {
   _saveUIState();
 
   if (typeof renderBoard === 'function') {
-        renderBoard();
-    }
+    renderBoard();
+  }
 }
 
 function getCardFilter() {
@@ -1364,10 +1392,12 @@ function _initBoardSortable() {
     bubbleScroll: true,
 
     async onStart(evt) {
+      isDragging = true;
       document.body.classList.add('dragging-active');
     },
 
     async onEnd(evt) {
+      isDragging = false;
       document.body.classList.remove('dragging-active');
       if (!currentUser || evt.oldIndex === evt.newIndex) return;
  
@@ -1424,8 +1454,7 @@ function _initCardSortable(columnId) {
       document.body.classList.add('dragging-active');
       cardId = e.item.dataset.cardId; 
       srcColId = e.item.dataset.colId; 
-    
-      // e.item.style.width = e.item.offsetWidth + 'px';
+      isDragging = true;
     },
 
     onUnchoose(e) {
@@ -1441,6 +1470,7 @@ function _initCardSortable(columnId) {
     },
  
     async onEnd(e) {
+      isDragging = false;
       document.body.classList.remove('dragging-active');
       if (throttle) { clearTimeout(throttle); throttle = null; }
       if (!cardId || !currentUser) return;
@@ -2173,7 +2203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       const activeModal = document.querySelector('dialog[open]');
 
-      if (isTyping || activeModal) {
+      if (isTyping || activeModal || isDragging) {
           return;
       }
 
