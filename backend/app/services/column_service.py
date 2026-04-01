@@ -26,8 +26,6 @@ class ColumnService:
         out = ColumnOut.model_validate(col)
         payload = out.model_dump(mode='json')
 
-        # json_compatible_payload = json.loads(payload.model_dump_json())
-        await self.event_repo.create('column_created', payload, str(col.id))
         await manager.publish('column_created', str(col.id), payload)
         logger.info(f'Column created: {col.id, col.name}')
         return out
@@ -38,35 +36,42 @@ class ColumnService:
             raise HTTPException(status_code=404, detail='Колонка не найдена.')
         
         updates: dict = {}
-        if data.name is None:
+        log_messages = []
+
+        # 1. Смена названия
+        if data.name is not None and data.name != col.name:
+            old_name = col.name
             updates['name'] = data.name
 
+        # 2. Изменение позиции (Drag-and-drop)
         if data.position is not None and data.position != col.position:
             old_pos = col.position
-            new_pos = data.position
             all_cols = await self.repo.get_all()
             max_pos = len(all_cols) - 1
-            new_pos = min(new_pos, max_pos)
+            new_pos = min(data.position, max_pos)
 
-            if new_pos < old_pos:
-                for c in all_cols:
-                    if c.id != col.id and new_pos <= c.position < old_pos:
-                        c.position += 1
+            if new_pos != old_pos:
+                if new_pos < old_pos:
+                    for c in all_cols:
+                        if c.id != col.id and new_pos <= c.position < old_pos:
+                            c.position += 1
+                else:
+                    for c in all_cols:
+                        if c.id != col.id and old_pos < c.position <= new_pos:
+                            c.position -= 1
 
-            else:
-                for c in all_cols:
-                    if c.id != col.id and old_pos < c.position <= new_pos:
-                        c.position -= 1
+                await self.session.flush()
+                updates['position'] = new_pos
 
-            await self.session.flush()
-            updates['position'] = new_pos
-        
+        if not updates:
+            return ColumnOut.model_validate(col)
+
         col = await self.repo.update(col, **updates)
         out = ColumnOut.model_validate(col)
         payload = out.model_dump(mode='json')
-        await self.event_repo.create('column_update', payload, str(col.id))
+        
         await manager.publish('column_updated', str(col.id), payload)
-        logger.info(f'Column updated: {col.id}')
+        await self.session.commit()
         return out
     
     async def delete(self, column_id: uuid.UUID) -> None:
@@ -81,9 +86,11 @@ class ColumnService:
                 detail="Невозможно удалить колонку с карточками. Переместите или удалите карточки сначала.",
             )
         
+        col_name = col.name
         await self.repo.delete(col)
         await self.repo.normalize_positions()
-        payload = {'id': str(column_id)}
-        await self.event_repo.create('column_deleted', payload, str(column_id))
+        
+        payload = {'id': str(column_id), 'name': col_name}
+        
         await manager.publish('column_deleted', str(column_id), payload)
-        logger.info(f'Column deleted: {column_id}')
+        await self.session.commit()

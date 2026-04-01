@@ -36,7 +36,6 @@ class UserService:
         
         user = await self.repo.set_online(user, True)
         payload = {'user_id': str(user.user_id), 'username': user.username}
-        await self.event_repo.create('user_online', payload, str(user.username))
         await manager.publish('user_online', str(user.user_id), payload)
 
         db_session = await self.session_repo.create(user.user_id)
@@ -68,7 +67,6 @@ class UserService:
             
         user = await self.repo.set_online(user, True)
         payload = {'user_id': str(user.user_id), 'username': user.username}
-        await self.event_repo.create('user_online', payload, str(user.username))
         await manager.publish('user_online', str(user.user_id), payload)
 
         db_session = await self.session_repo.create(user.user_id)
@@ -86,7 +84,6 @@ class UserService:
 
         await self.repo.set_online(user, False)
         payload = {'user_id': str(user.user_id), 'username': user.username}
-        await self.event_repo.create('user_offline', payload, str(user.username))
         await manager.publish('user_offline', str(user.user_id), payload)
         logger.info("User logged out: %s", user.username)
     

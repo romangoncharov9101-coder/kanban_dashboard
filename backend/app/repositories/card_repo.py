@@ -42,20 +42,13 @@ class CardRepository:
     #======================================================
     # Cards
     #======================================================
-    async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None, sort_by: str = 'position') -> list[Card]:
+    async def get_all(self, column_id: uuid.UUID | None = None, assigned_to: uuid.UUID | None = None) -> list[Card]:
         q = self._get_base_query()
+
         if column_id:
             q = q.where(Card.column_id == column_id)
         if assigned_to:
             q = q.where(Card.assigned_to == assigned_to)
-
-        match sort_by:
-            case 'priority':
-                q = q.order_by(Card.priority.desc(), Card.created_at.asc(), Card.position.asc())
-            case 'deadline':
-                q = q.order_by(Card.deadline.asc().nullslast(), Card.position.asc())
-            case _:
-                q = q.order_by(Card.column_id, Card.position)
                 
         result = await self.session.execute(q)
         return [self._map_row_to_card(row) for row in result.all()]
@@ -78,6 +71,24 @@ class CardRepository:
         val = result.scalar_one_or_none()
         return val if val is not None else -1
     
+    async def archive_card(self, card_id: uuid.UUID) -> bool:
+        card = await self.get_by_id(card_id)
+        if card:
+            card.is_archived = True
+            card.updated_at = datetime.now(timezone.utc)
+            await self.session.flush()
+            return True
+        return False
+    
+    async def restore_card(self, card_id: uuid.UUID) -> bool:
+        card = await self.get_by_id(card_id)
+        if card:
+            card.is_archived = False
+            card.updated_at = datetime.now(timezone.utc)
+            await self.session.flush()
+            return True
+        return False
+
     async def create(
             self,
             title: str,
@@ -87,7 +98,8 @@ class CardRepository:
             description: str = None,
             assigned_to: uuid.UUID = None,
             deadline: datetime = None,
-            priority: CardPriority = CardPriority.LOW
+            priority: CardPriority = CardPriority.LOW,
+            is_archived: bool = False
     ) -> Card:
         now = datetime.now(timezone.utc)
         card = Card(
@@ -100,6 +112,7 @@ class CardRepository:
             position=position,
             deadline=deadline,
             priority=priority,
+            is_archived=is_archived,
             created_at=now
         )
         self.session.add(card)

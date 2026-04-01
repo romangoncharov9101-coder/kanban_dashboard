@@ -6,7 +6,7 @@ from app.repositories.column_repo import ColumnRepository
 from app.repositories.event_repo import EventRepository
 from app.repositories.user_repo import UserRepository
 from app.repositories.notif_repo import NotificationRepository
-from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut, CommentOut
+from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut, CommentOut, EventType
 from app.db.models import Attachment
 from app.manager import manager
 from app.core.logging import get_logger
@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from fastapi.responses import FileResponse
 import os
-import shutil
 
 logger = get_logger('services.card')
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,10 +36,9 @@ class CardService:
     async def get_all(
             self,
             column_id: uuid.UUID | None = None,
-            assigned_to: uuid.UUID | None = None,
-            sort_by: str = 'position'
+            assigned_to: uuid.UUID | None = None
     ) -> list[CardOut]:
-        cards = await self.repo.get_all(column_id=column_id, assigned_to=assigned_to, sort_by=sort_by)
+        cards = await self.repo.get_all(column_id=column_id, assigned_to=assigned_to)
         return [CardOut.model_validate(c) for c in cards]
     
     async def create(self, data: CardCreate) -> CardOut:
@@ -83,7 +81,13 @@ class CardService:
             if not success:
                 await self.notif_repo.ensure_notification_exists(card.assigned_to, card.id)
 
-        await self.event_repo.create('card_created', payload, str(card.id))
+        await self.event_repo.create(
+            event_type=EventType.CARD_CREATED,
+            message=f"Карточка создана в колонке '{col.name}'",
+            card_id=card.id,
+            user_id=data.created_by,
+            payload=payload
+        )
         await manager.publish('card_created', str(card.id), payload)
         await self.session.commit()
         logger.info(f'Card created: {card.id, card.title}')
@@ -93,74 +97,115 @@ class CardService:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
- 
+
         updates: dict = {}
-        event_type = 'card_updated'
+        log_details = []
+        
+        # Ключевой момент: получаем только те поля, которые были явно переданы в запросе
+        sent_fields = data.model_fields_set
+
+        # 1. Заголовок
+        if 'title' in sent_fields and data.title != card.title:
+            updates['title'] = data.title
+            log_details.append(f"изменил название на '{data.title}'")
+
+        # 2. Описание
+        if 'description' in sent_fields and data.description != card.description:
+            updates['description'] = data.description
+            log_details.append("обновил описание")
+
+        # 3. Дедлайн
+        if 'deadline' in sent_fields and data.deadline != card.deadline:
+            updates['deadline'] = data.deadline
+            date_str = data.deadline.strftime('%d.%m.%Y') if data.deadline else "удален"
+            log_details.append(f"установил дедлайн: {date_str}")
+
+        # 4. Приоритет
+        if 'priority' in sent_fields and data.priority != card.priority:
+            updates['priority'] = data.priority
+            # Очищаем имя приоритета от префикса 'cardpriority.' для красоты
+            p_name = data.priority.value if hasattr(data.priority, 'value') else str(data.priority)
+            log_details.append(f"сменил приоритет на {p_name.split('.')[-1]}")
+
+        # 5. Исполнитель (Важное исправление логики)
+        if 'assigned_to' in sent_fields and data.assigned_to != card.assigned_to:
+            updates['assigned_to'] = data.assigned_to
+            if data.assigned_to:
+                user = await self.user_repo.get_user_by_id(data.assigned_to)
+                if not user:
+                    raise HTTPException(status_code=404, detail='Исполняющий пользователь не найден.')
+                log_details.append(f"назначил исполнителя: {user.username}")
+            else:
+                log_details.append("убрал исполнителя")
+
+        # 6. Перемещение в другую колонку
+        event_type = EventType.CARD_EDITED
         original_column_id = card.column_id
         old_assignee = card.assigned_to
- 
-        if data.title is not None:
-            updates['title'] = data.title
-        if data.description is not None:
-            updates['description'] = data.description
-        if 'description' in data.model_fields_set and data.description is None:
-            updates['description'] = None
-        if 'deadline' in data.model_fields_set:
-            updates['deadline'] = data.deadline
-        if data.priority is not None:
-            updates['priority'] = data.priority
- 
-        if data.assigned_to is not None:
-            user = await self.user_repo.get_user_by_id(data.assigned_to)
-            if not user:
-                raise HTTPException(status_code=404, detail='Исполняющий пользователь не найден.')
-            updates['assigned_to'] = data.assigned_to
-        if 'assigned_to' in data.model_fields_set and data.assigned_to is None:
-            updates['assigned_to'] = None
- 
-        if data.column_id is not None and data.column_id != card.column_id:
-            col = await self.column_repo.get_by_id(data.column_id)
-            if not col:
+
+        if 'column_id' in sent_fields and data.column_id != card.column_id:
+            target_col = await self.column_repo.get_by_id(data.column_id)
+            if not target_col:
                 raise HTTPException(status_code=404, detail='Целевая колонка не найдена.')
+            
             max_pos = await self.repo.get_max_position_in_column(data.column_id)
             updates['column_id'] = data.column_id
             updates['position'] = max_pos + 1
-            event_type = 'card_moved'
- 
+            
+            event_type = EventType.CARD_MOVED
+            log_details.append(f"переместил карточку в колонку '{target_col.name}'")
+
+        # Если ничего не изменилось по факту (значения те же, что в БД)
+        if not updates:
+            return CardOut.model_validate(card)
+
+        # Сохраняем изменения
         card = await self.repo.update(card, **updates)
- 
-        if event_type == 'card_moved':
+
+        # Обработка после перемещения
+        if event_type == EventType.CARD_MOVED:
             await self.repo.normalize_position_in_column(original_column_id)
 
+        # Логика уведомлений (оставляем твою)
         new_assignee = updates.get('assigned_to')
-        if new_assignee and new_assignee != old_assignee and str(new_assignee) != str(current_user_id):
+        if 'assigned_to' in updates and new_assignee != old_assignee and str(new_assignee) != str(current_user_id):
             if old_assignee:
                 await self.notif_repo.delete_all_for_user(old_assignee)
-
-            updater = await self.user_repo.get_user_by_id(current_user_id)
-            notif_msg = {
-                'event': 'notification',
-                'payload': {
-                    'card_title': card.title,
-                    'from_user': updater.username if updater else 'System',
-                    'priority': card.priority,
-                    'type': 'assigment'
+            
+            if new_assignee:
+                updater = await self.user_repo.get_user_by_id(current_user_id)
+                notif_msg = {
+                    'event': 'notification',
+                    'payload': {
+                        'card_title': card.title,
+                        'from_user': updater.username if updater else 'System',
+                        'priority': card.priority,
+                        'type': 'assigment'
+                    }
                 }
-            }
-            success = await manager.send_personal_message(str(new_assignee), notif_msg)
+                success = await manager.send_personal_message(str(new_assignee), notif_msg)
+                if not success:
+                    await self.notif_repo.ensure_notification_exists(new_assignee, card.id)
 
-            if not success:
-                await self.notif_repo.ensure_notification_exists(new_assignee, card.id)
-        
+        # Формируем финальное сообщение для истории
+        final_message = "; ".join(log_details).capitalize()
+
         out = CardOut.model_validate(card)
-        payload = out.model_dump(mode='json')
-        await self.event_repo.create(event_type, payload, str(card.id))
-        await manager.publish(event_type, str(card.id), payload)
+        await self.event_repo.create(
+            event_type=event_type,
+            message=final_message,
+            card_id=card.id,
+            user_id=current_user_id,
+            payload=out.model_dump(mode='json')
+        )
+
+        ws_event = "card_moved" if event_type == EventType.CARD_MOVED else "card_updated"
+        await manager.publish(ws_event, str(card.id), out.model_dump(mode='json'))
+        
         await self.session.commit()
-        logger.info(f"Card {event_type, card.id}")
         return out
 
-    async def delete(self, card_id: uuid.UUID) -> None:
+    async def delete(self, card_id: uuid.UUID, user_id: uuid.UUID) -> None:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
@@ -183,13 +228,19 @@ class CardService:
         await self.repo.normalize_position_in_column(column_id)
 
         payload = {'id': str(card_id)}
-        await self.event_repo.create('card_deleted', payload, str(card_id))
+        # await self.event_repo.create('card_deleted', payload, str(card_id))
+        await self.event_repo.create(
+            event_type=EventType.CARD_DELETED,
+            message=f"Удалил карточку '{card.title}",
+            card_id=None,
+            user_id=user_id
+        )
         await manager.publish('card_deleted', str(card_id), payload)
         await self.session.commit()
 
         logger.info(f'Card deleted: {card_id}')
 
-    async def move(self, card_id: uuid.UUID, data: CardMoveRequest) -> CardOut:
+    async def move(self, card_id: uuid.UUID, data: CardMoveRequest, current_user_id: uuid.UUID) -> CardOut:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
@@ -239,11 +290,69 @@ class CardService:
 
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
-        await self.event_repo.create('card_moved', payload, str(card.id))
+
+        if same_column:
+            log_msg = f"Изменил приоритет отображения (позиция {card.position})"
+        else:
+            log_msg = f"Переместил карточку в колонку '{target_col.name}' на позицию {card.position}"
+
+        await self.event_repo.create(
+            event_type=EventType.CARD_MOVED,
+            message=log_msg,
+            card_id=card.id,
+            user_id=current_user_id,
+            payload=payload                  
+        )
+        
         await manager.publish('card_moved', str(card.id), payload)
         logger.info(f'Card moved: {card_id} → column {data.target_column_id} pos {card.position}')
         return out
     
+    async def archive(self, card_id: uuid.UUID, user_id: uuid.UUID) -> CardOut:
+        card = await self.repo.get_by_id(card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
+        
+        card.is_archived = True
+        await self.session.flush()
+        out = CardOut.model_validate(card)
+        payload = out.model_dump(mode='json')
+
+        await self.event_repo.create(
+            event_type=EventType.CARD_ARCHIVED,
+            message=f'Карточка "{card.title}" перемещена в архив.',
+            card_id=card_id,
+            user_id=user_id,
+            payload=payload
+        )
+
+        await manager.publish('card_archived', str(card.id), payload)
+        await self.session.commit()
+        return out
+    
+    async def unarchive(self, card_id: uuid.UUID, user_id: uuid.UUID) -> CardOut:
+        card = await self.repo.get_by_id(card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
+        
+        card.is_archived = False
+        await self.session.flush()
+
+        out = CardOut.model_validate(card)
+        payload = out.model_dump(mode='json')
+
+        await self.event_repo.create(
+            event_type=EventType.CARD_RESTORED,
+            message=f"Карточка '{card.title}' восстановлена из архива",
+            card_id=card.id,
+            user_id=user_id,
+            payload=payload
+        )
+
+        await manager.publish('card_restored', str(card.id), payload)
+        await self.session.commit()
+        return out
+
     #======================================================
     # Attachments
     #======================================================
@@ -280,7 +389,7 @@ class CardService:
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
-    async def upload_card_file(self, card_id: uuid.UUID, file: UploadFile):
+    async def upload_card_file(self, card_id: uuid.UUID, file: UploadFile, user_id: uuid.UUID):
         count = await self.repo.get_attachment_count(card_id)
         if count >= 5:
             raise HTTPException(status_code=400, detail="Максимум 5 файлов на карточку.")
@@ -308,24 +417,31 @@ class CardService:
         updated_card = await self.repo.get_by_id(card_id)
         out = CardOut.model_validate(updated_card)
         payload = out.model_dump(mode='json')
+
+        await self.event_repo.create(
+            event_type=EventType.CARD_EDITED,
+            message=f"Прикреплен файл {file.filename}",
+            card_id=card_id,
+            user_id=user_id,
+            payload=payload
+        )
+
         await manager.publish('card_updated', str(card_id), payload)
 
         await self.session.commit()
         logger.info(f"Attachment saved to DB: {attachment.id} for card {card_id}")
         return attachment
     
-    async def delete_attachment(self, attachment_id: uuid.UUID):
+    async def delete_attachment(self, attachment_id: uuid.UUID, user_id: uuid.UUID):
         attachment = await self.repo.get_attachment_by_id(attachment_id)
         if not attachment:
-            raise HTTPException(status_code=404, detail="Карточка не найдена.")
+            raise HTTPException(status_code=404, detail="Вложение не найдено")
         
         stmt = select(Attachment).where(Attachment.id == attachment_id)
         result = await self.session.execute(stmt)
         attachment = result.scalar_one_or_none()
         card_id = attachment.card_id
 
-        if not attachment:
-            raise HTTPException(status_code=404, detail='Вложение не найдено.')
         
         try:
             if attachment.file_path and os.path.exists(attachment.file_path):
@@ -339,8 +455,16 @@ class CardService:
         updated_card = await self.repo.get_by_id(card_id)
         out = CardOut.model_validate(updated_card)
         payload = out.model_dump(mode='json')
-        await manager.publish('card_updated', str(card_id), payload)
 
+        await self.event_repo.create(
+            event_type=EventType.CARD_EDITED,
+            message=f"Удален файл: {filename}",
+            card_id=card_id,
+            user_id=user_id,
+            payload=payload
+        )
+
+        await manager.publish('card_updated', str(card_id), payload)
         await self.repo.delete_attachment(attachment_id)
         await self.session.commit()
         return {'status': 'success'}
@@ -357,7 +481,14 @@ class CardService:
         out = CommentOut.model_validate(comment)
         payload = out.model_dump(mode='json')
 
-        await self.event_repo.create('comment_created', payload, str(card_id))
+        await self.event_repo.create(
+            event_type=EventType.COMMENT_ADDED,
+            message=f"Добавил комментарий: {text[:50]}{'...' if len(text) > 50 else ''}",
+            card_id=card_id,
+            user_id=user_id,
+            payload=payload
+        )
+
         await manager.publish('comment_created', str(card_id), payload)
         await self.session.commit()
         logger.info(f'Comment {comment.id} added to card {card_id} by user {user_id}')
@@ -376,7 +507,13 @@ class CardService:
         out = CommentOut.model_validate(updated_comment)
         payload = out.model_dump(mode='json')
 
-        await self.event_repo.create('comment_updated', payload, str(comment.card_id))
+        await self.event_repo.create(
+            event_type=EventType.COMMENT_EDITED,
+            message=f"Отредактировал свой комментарий",
+            card_id=comment.card_id,
+            user_id=user_id,
+            payload=payload
+        )
         await manager.publish('comment_updated', str(comment.card_id), payload)
 
         await self.session.commit()
@@ -396,7 +533,14 @@ class CardService:
         await self.repo.delete_comment(comment)
         payload = {'id': str(comment_id), 'card_id': str(card_id)}
         
-        await self.event_repo.create('comment_deleted', payload, str(card_id))
+        await self.event_repo.create(
+            event_type=EventType.COMMENT_DELETED, 
+            message="Удалил комментарий",
+            card_id=card_id,
+            user_id=user_id,
+            payload=payload
+        )
+        
         await manager.publish('comment_deleted', str(card_id), payload)
         await self.session.commit()
         logger.info(f"Comment {comment_id} deleted by user {user_id}")

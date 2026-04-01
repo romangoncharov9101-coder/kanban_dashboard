@@ -20,13 +20,18 @@ let pendingDeletions = [];
 let currentSortMode = 'position';
 let currentFilterMode = 'all';
 let lastSpacePress = 0;
+let lastAPress = 0;
 let lastCommentId = null;
 let commentsHasMore = true;
 let isLoadingComments = false;
+let lastEventId = null;
+let historyHasMore = true;
+let isLoadingHistory = false;
 const remoteDrags = new Map();
 const cardSortables = new Map();
 const DOUBLE_PRESS_DELAY = 300;
 const COMMENTS_LIMIT = 20;
+const EVENTS_LIMIT = 20;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOAST / ALERTS  — заменяем все alert() красивыми тостами
@@ -36,6 +41,12 @@ function showToast(message, type = 'info', duration = 3000, quite = false) {
   if (quite === true) return;
   const container = document.getElementById('toast-container');
   if (!container) return;
+
+  const currentToasts = Array.from(container.children).filter(t => t.style.opacity !== '0');
+  
+  if (currentToasts.length >= 3) {
+    _removeToast(currentToasts[0]);
+  }
 
   const activeModal = document.querySelector('dialog[open]');
   if (activeModal) {
@@ -195,16 +206,13 @@ function esc(s) {
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH
 // ─────────────────────────────────────────────────────────────────────────────
-// const _usernameRe = /^[a-zA-Zа-яА-ЯёЁ]{1,100}$/;
-// const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁ0-9\s]{1,100}$/;
-// const _cardTitleRe = /^[a-zA-Zа-яА-ЯёЁ0-9\s.,!?\-_]{1,200}$/;
 
 const _usernameRe = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9]{1,100}$/;
 const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]{1,100}$/;
  
 async function doRegister() {
-  const u = document.getElementById('auth-username').value.trim();
-  const p = document.getElementById('auth-password').value;
+  const u = (document.getElementById('auth-username')?.value || document.getElementById('auth-username-m')?.value || '').trim();
+  const p = document.getElementById('auth-password')?.value || document.getElementById('auth-password-m')?.value || '';
 
   if (!_usernameRe.test(u)) return toast.warn('Никнейм: только буквы и цифры, 1–100 символов');
   if (p.length < 6) return toast.warn('Пароль: минимум 6 символов');
@@ -217,8 +225,8 @@ async function doRegister() {
 }
  
 async function doLogin() {
-  const u = document.getElementById('auth-username').value.trim();
-  const p = document.getElementById('auth-password').value;
+  const u = (document.getElementById('auth-username')?.value || document.getElementById('auth-username-m')?.value || '').trim();
+  const p = document.getElementById('auth-password')?.value || document.getElementById('auth-password-m')?.value || '';
 
   if (!u || !p) return toast.warn('Введите логин и пароль');
 
@@ -245,10 +253,23 @@ async function doLogout() {
  
 async function _uiLoggedIn(user) {
   currentUser = { user_id: user.user_id, username: user.username };
-  document.getElementById('auth-area').classList.add('hidden');
-  const ui = document.getElementById('user-info');
-  ui.classList.remove('hidden'); ui.classList.add('flex');
-  document.getElementById('current-username').textContent = currentUser.username;
+
+  // Desktop
+  const authDesktop = document.getElementById('auth-area-desktop');
+  if (authDesktop) authDesktop.classList.add('hidden');
+  const uiDesktop = document.getElementById('user-info');
+  if (uiDesktop) { uiDesktop.classList.remove('hidden'); uiDesktop.classList.add('flex'); }
+  const unDesktop = document.getElementById('current-username');
+  if (unDesktop) unDesktop.textContent = currentUser.username;
+
+  // Mobile
+  const authMobile = document.getElementById('auth-area');
+  if (authMobile) authMobile.classList.add('hidden');
+  const uiMobile = document.getElementById('user-info-mobile');
+  if (uiMobile) { uiMobile.classList.remove('hidden'); uiMobile.classList.add('flex'); }
+  const unMobile = document.getElementById('current-username-m');
+  if (unMobile) unMobile.textContent = currentUser.username;
+
   document.getElementById('btn-add-col').disabled = false;
   connectWS();
   renderBoard();
@@ -261,11 +282,27 @@ async function _uiLoggedIn(user) {
  
 function _uiLoggedOut() {
   currentUser = null;
-  document.getElementById('auth-area').classList.remove('hidden');
-  const ui = document.getElementById('user-info');
-  ui.classList.add('hidden'); ui.classList.remove('flex');
+
+  // Desktop
+  const authDesktop = document.getElementById('auth-area-desktop');
+  if (authDesktop) authDesktop.classList.remove('hidden');
+  const uiDesktop = document.getElementById('user-info');
+  if (uiDesktop) { uiDesktop.classList.add('hidden'); uiDesktop.classList.remove('flex'); }
+
+  // Mobile
+  const authMobile = document.getElementById('auth-area');
+  if (authMobile) authMobile.classList.remove('hidden');
+  const uiMobile = document.getElementById('user-info-mobile');
+  if (uiMobile) { uiMobile.classList.add('hidden'); uiMobile.classList.remove('flex'); }
+
   document.getElementById('btn-add-col').disabled = true;
-  document.getElementById('auth-password').value = '';
+
+  // Clear passwords in both inputs
+  const pwDesktop = document.getElementById('auth-password');
+  if (pwDesktop) pwDesktop.value = '';
+  const pwMobile = document.getElementById('auth-password-m');
+  if (pwMobile) pwMobile.value = '';
+
   renderBoard();
 }
  
@@ -349,6 +386,7 @@ function connectWS() {
       case 'card_created':      case 'card_updated':      case 'card_moved':   case 'card_deleted':
       case 'user_online':       case 'user_offline':      case 'user_created':
       case 'comment_created':   case 'comment_updated':   case 'comment_deleted':
+      case 'card_archived':     case 'card_restored':
         schedulePartialReload(msg.event);
         break;
     }
@@ -381,6 +419,7 @@ async function _flushReload() {
   const needsColumns = events.has('column_created') || events.has('column_updated') || events.has('column_deleted');
   const needsCards   = events.has('card_created')   || events.has('card_updated')   ||
                        events.has('card_deleted')   || events.has('card_moved')     ||
+                       events.has('card_archived')  || events.has('card_restored')  ||
                        needsComments;
   const needsOnline  = events.has('user_online')    || events.has('user_offline');
  
@@ -390,7 +429,6 @@ async function _flushReload() {
     else if (needsColumns && needsOnline)     await Promise.all([_loadColumns(), _loadOnlineUsers()]);
     else if (needsColumns)                    await _loadColumns();
     else if (needsCards && needsOnline)       await Promise.all([_loadCards(), _loadOnlineUsers()]);
-    else if (needsCards)                      await _loadCards();
     else if (needsCards)                      await _loadCards();
     else if (needsOnline)                     await _loadOnlineUsers();
   } finally {
@@ -431,17 +469,6 @@ function _sendDragEvent(cardId, srcColId, curColId, curPos) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA LOADING
 // ─────────────────────────────────────────────────────────────────────────────
-// async function loadBoard() {
-//   if (!currentUser) return;
-//   const [cols, crds] = await Promise.all([
-//     api('GET', '/columns'),
-//     api('GET', '/cards'),
-//   ]);
-//   if (!cols || !crds ) return;
-//   columns = cols; cards = crds;
-//   _renderOnlineUsers();
-//   renderBoard();
-// }
 
 async function loadBoard() {
   const data = await api('GET', '/board/init');
@@ -456,7 +483,8 @@ async function loadBoard() {
  
 async function _loadCards() {
   if (!currentUser) return;
-  const crds = await api('GET', '/cards');
+  
+  const crds = await api('GET', `/cards`);
   if (!crds) return;
   cards = crds;
   renderBoard();
@@ -500,6 +528,20 @@ function renderBoard() {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
+  const isArchived = currentFilterMode === 'archived';
+
+  const boardEl = document.getElementById('board');
+  if (isArchived) {
+      boardEl.classList.add('archive-mode');
+  } else {
+      boardEl.classList.remove('archive-mode');
+  }
+
+  const btnAddCol = document.getElementById('btn-add-col');
+  if (btnAddCol) {
+    btnAddCol.style.display = (currentUser && !isArchived) ? '' : 'none';
+  }
+
   const sorter = getCardSorted();
   const filter = getCardFilter();
   const sortedCols = [...columns].sort((a, b) => a.position - b.position);
@@ -512,20 +554,20 @@ function renderBoard() {
 
         board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
     });
- 
-  // [...columns].sort((a, b) => a.position - b.position).forEach(col => {
-  //   const colCards = cards
-  //     .filter(c => c.column_id === col.id)
-  //     .sort((a, b) => a.position - b.position);
-  //   board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
-  // });
- 
-  _initBoardSortable();
-  columns.forEach(col => _initCardSortable(col.id));
+
+
+  if (currentFilterMode !== 'archived') {
+    _initBoardSortable();
+    columns.forEach(col => _initCardSortable(col.id));
+  } else {
+    cardSortables.forEach(s => s.destroy());
+    cardSortables.clear();
+  }
 }
  
 function _renderColumn(col, colCards) {
   const ce = !!currentUser;
+  const isArchived = currentFilterMode === 'archived';
   const count = colCards.length;
   return `
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col
@@ -537,12 +579,13 @@ function _renderColumn(col, colCards) {
         <div class="flex items-center gap-2 min-w-0">
           <h3 class="font-semibold text-slate-800 truncate text-sm" title="${esc(col.name)}">${esc(col.name)}</h3>
           <span class="bg-slate-100 text-slate-500 text-[10px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0">${count}</span>
+          ${isArchived ? `<span class="bg-amber-100 text-amber-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide">архив</span>` : ''}
         </div>
-        ${ce ? `<button onclick="deleteColumn('${col.id}')"
+        ${ce && !isArchived ? `<button onclick="deleteColumn('${col.id}')"
           class="text-slate-400 hover:text-red-500 text-sm flex-shrink-0 ml-2" title="Удалить">✕</button>` : ''}
       </div>
-      <!-- Add card -->
-      ${ce ? `<div class="px-2 pb-2">
+      <!-- Add card (скрыто в режиме архива) -->
+      ${ce && !isArchived ? `<div class="px-2 pb-2">
         <button onclick="openAddCard('${col.id}')"
           class="w-full text-xs text-indigo-600 border border-dashed border-indigo-200
                  rounded-lg px-2 py-1.5 hover:bg-indigo-50 hover:border-indigo-400 transition-colors">
@@ -638,6 +681,21 @@ function _renderCard(c) {
           ${currentUser ? `
           <div class="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                onclick="event.stopPropagation()">
+               ${c.is_archived ? `
+              <button onclick="unarchiveCardAction(event, '${c.id}')" title="Вернуть из архива"
+                class="text-amber-500 hover:text-amber-600 p-0.5 rounded">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+              </button>
+            ` : `
+              <button onclick="archiveCardAction(event, '${c.id}')" title="В архив"
+                class="text-slate-400 hover:text-amber-500 p-0.5 rounded">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                </svg>
+              </button>
+            `}
             <button onclick="openEditCard('${c.id}')" title="Редактировать"
               class="text-slate-400 hover:text-indigo-600 p-0.5 rounded">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -713,7 +771,35 @@ function _downloadAttachments(attachments, cardId = null) {
     }, i * 200);
   })
 }
- 
+
+async function archiveCardAction(e, cardId) {
+  if (e) e.stopPropagation(); 
+  if (!confirm('Переместить карточку в архив?')) return;
+
+  const res = await api('POST', `/cards/${cardId}/archive`);
+  if (res) {
+    toast.success('Карточка перемещена в архив');
+    
+    const card = cards.find(c => c.id === cardId);
+    if (card) card.is_archived = true;
+    renderBoard(); 
+  }
+}
+
+async function unarchiveCardAction(e, cardId) {
+  if (e) e.stopPropagation();
+
+  const res = await api('POST', `/cards/${cardId}/unarchive`);
+  if (res) {
+    toast.success('Карточка восстановлена из архива');
+    
+    // Мгновенно убираем карточку из списка архива и перерисовываем
+    const card = cards.find(c => c.id === cardId);
+    if (card) card.is_archived = false;
+    renderBoard(); 
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DEADLINE HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1036,9 +1122,10 @@ function _saveUIState() {
 // ─────────────────────────────────────────────────────────────────────────────
 // FILTERING
 // ─────────────────────────────────────────────────────────────────────────────
-function changeFilterMode(mode) {
+async function changeFilterMode(mode) {
   currentFilterMode = mode;
   _saveUIState();
+
   if (typeof renderBoard === 'function') {
         renderBoard();
     }
@@ -1047,6 +1134,14 @@ function changeFilterMode(mode) {
 function getCardFilter() {
   const meId = currentUser?.user_id;
   return (card) => {
+    if (currentFilterMode === 'archived') {
+      return card.is_archived === true;
+    }
+
+    if (card.is_archived) {
+      return false;
+    }
+
     switch (currentFilterMode){
       case 'all':
         return true;
@@ -1134,9 +1229,6 @@ function showNotification(payload) {
   btnShow.onclick = () => {
     const fSelect = document.getElementById('filter-select');
     if (fSelect) fSelect.value = 'my';
-    if (typeof changeFilterMode === 'function') {
-      changeFilterMode('my');
-    }
     _removeToast(toast_);
   };
 
@@ -1184,7 +1276,7 @@ async function showOfflineNotification() {
     await api('DELETE', '/notifications/clear');
     const fSelect = document.getElementById('filter-select');
     if (fSelect) fSelect.value = 'my';
-    changeFilterMode('my');
+    await changeFilterMode('my');
     _removeToast(t);
   };
  
@@ -1240,13 +1332,43 @@ function _getToastContainer() {
 // ─────────────────────────────────────────────────────────────────────────────
 // SORTABLEJS: COLUMNS
 // ─────────────────────────────────────────────────────────────────────────────
+function _isTouchDevice() {
+  return ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+}
+
 function _initBoardSortable() {
+  const touch = _isTouchDevice();
+  if (currentFilterMode === 'archived') return;
   boardSortable = Sortable.create(document.getElementById('board'), {
     animation: 200,
     handle: '.col-handle',
-    ghostClass: 'col-ghost', dragClass: 'col-drag', chosenClass: 'col-chosen',
+    ghostClass: 'col-ghost',
+    dragClass: 'col-drag',
+    chosenClass: 'col-chosen',
     disabled: !currentUser,
+    forceFallback: true,
+    fallbackClass: 'col-drag',
+    fallbackOnBody: true,
+    fallbackTolerance: 3,
+    delay: touch ? 200 : 0,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 4,
+    swapThreshold: 0.65,
+    delay: touch ? 100 : 0,
+    touchStartThreshold: 10,
+    delayOnTouchOnly: true,
+
+    scroll: true,
+    scrollSensitivity: 100,
+    scrollSpeed: 20,
+    bubbleScroll: true,
+
+    async onStart(evt) {
+      document.body.classList.add('dragging-active');
+    },
+
     async onEnd(evt) {
+      document.body.classList.remove('dragging-active');
       if (!currentUser || evt.oldIndex === evt.newIndex) return;
  
       const colId  = evt.item.dataset.columnId;
@@ -1260,7 +1382,6 @@ function _initBoardSortable() {
       }
       const result = await api('PUT', `/columns/${colId}`, { position: newPos });
       if (!result) {
-        // Откат при ошибке
         await loadBoard();
       }
     },
@@ -1272,14 +1393,44 @@ function _initCardSortable(columnId) {
   if (!listEl) return;
   let srcColId = null, cardId = null, throttle = null;
  
+  const touch = _isTouchDevice();
   const s = Sortable.create(listEl, {
     group: 'cards',
     animation: 150,
-    ghostClass: 'card-ghost', dragClass: 'card-drag', chosenClass: 'card-chosen',
-    disabled: !currentUser || currentFilterMode !== 'all',
-    disabled: !currentUser,
- 
-    onStart(e) { cardId = e.item.dataset.cardId; srcColId = e.item.dataset.colId; },
+    ghostClass: 'card-ghost',
+    dragClass: 'card-drag',
+    chosenClass: 'card-chosen',
+    disabled: !currentUser || currentFilterMode === 'archived',
+    forceFallback: true,     
+    fallbackClass: 'card-drag',
+    fallbackOnBody: true,
+    fallbackTolerance: 5,
+    delay: touch ? 200 : 0,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 4,
+    swapThreshold: 0.65,
+    bubbleScroll: true,
+    invertSwap: true,
+    delay: touch ? 100 : 0,
+    touchStartThreshold: 10,
+    delayOnTouchOnly: true,
+
+    scroll: true,
+    scrollSensitivity: 100,
+    scrollSpeed: 20,
+    bubbleScroll: true,
+
+    onStart(e) {
+      document.body.classList.add('dragging-active');
+      cardId = e.item.dataset.cardId; 
+      srcColId = e.item.dataset.colId; 
+    
+      // e.item.style.width = e.item.offsetWidth + 'px';
+    },
+
+    onUnchoose(e) {
+        e.item.style.width = '';
+    },
  
     onMove(e) {
       if (!cardId || !currentUser) return;
@@ -1290,6 +1441,7 @@ function _initCardSortable(columnId) {
     },
  
     async onEnd(e) {
+      document.body.classList.remove('dragging-active');
       if (throttle) { clearTimeout(throttle); throttle = null; }
       if (!cardId || !currentUser) return;
 
@@ -1389,7 +1541,7 @@ function openAddCard(colId) {
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
 
-  const listContainer = document.getElementById('comments-section');
+  const listContainer = document.getElementById('main-comments-section');
   listContainer.classList.add('hidden');
 
   clearDeadline();
@@ -1402,14 +1554,46 @@ function openAddCard(colId) {
 async function openEditCard(cardId) {
   const card = cards.find(c => c.id === cardId);
   if (!card) return;
-  document.getElementById('modal-card-title').textContent = 'Edit Card';
+
+  const isArchived = card.is_archived || currentFilterMode === 'archived';
+
+  document.getElementById('modal-card-title').textContent = isArchived ? '📦 Просмотр (архив)' : 'Edit Card';
   document.getElementById('card-edit-id').value = cardId;
   document.getElementById('card-col-id').value = card.column_id;
   document.getElementById('card-title-input').value = card.title;
   document.getElementById('card-desc-input').value = card.description || '';
   document.getElementById('card-assign-search').value = card.assigned_to_username || '';
   document.getElementById('card-assign-id').value = card.assigned_to || '';
-  
+
+  // Режим только-чтение для архива
+  const editableFields = [
+    'card-title-input', 'card-desc-input', 'card-assign-search',
+    'card-deadline-input'
+  ];
+  editableFields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = isArchived;
+  });
+  // Радио-кнопки приоритета
+  document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = isArchived; });
+  // Кнопки дедлайн-пресетов и очистки
+  document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
+    b.style.display = isArchived ? 'none' : '';
+  });
+  // Зона вложений — скрыть в архиве
+  const dropZone = document.getElementById('drop-zone');
+  if (dropZone) dropZone.style.display = isArchived ? 'none' : '';
+  // Поле комментария — скрыть в архиве
+  const commentInput = document.querySelector('#comments-section .relative.group');
+  if (commentInput) commentInput.style.display = isArchived ? 'none' : '';
+
+  const commentField = document.getElementById('card-new-comment');
+  if (commentField) commentField.value = '';
+
+  // Кнопка сохранить / footer
+  const saveBtn = document.querySelector('#modal-card button[onclick="submitCard()"]');
+  if (saveBtn) saveBtn.style.display = isArchived ? 'none' : '';
+
   const priority = card.priority || "LOW";
   const radioToSelect = document.querySelector(`input[name="card-priority"][value="${priority}"]`);
   if (radioToSelect) radioToSelect.checked = true;
@@ -1426,13 +1610,14 @@ async function openEditCard(cardId) {
   commentsHasMore = true;
   isLoadingComments = true;
 
-  const listSection = document.getElementById('comments-section');
+  const listSection = document.getElementById('main-comments-section');
   const listContainer = document.getElementById('comments-list');
   const listLabel = document.getElementById('comments-label');
 
   listSection.classList.remove('hidden');
   listContainer.innerHTML = '';
 
+  switchCardTab('comments');
   refreshCommentsUI();
 
   listContainer.classList.add('hidden');
@@ -1473,6 +1658,12 @@ async function openEditCard(cardId) {
 
 let lastSubmitTime = 0;
 async function submitCard() {
+  // Запрет сохранения в режиме архива
+  if (currentFilterMode === 'archived') {
+    toast.warn('В режиме архива редактирование недоступно');
+    return;
+  }
+
   const now = Date.now();
     
     if (now - lastSubmitTime < 2000) {
@@ -1589,6 +1780,130 @@ function refreshCommentsUI() {
         listContainer.classList.add('hidden');
         listContainer.style.display = 'none';
     }
+}
+
+function switchCardTab(tab) {
+  const isComm = tab === 'comments';
+  const commSection = document.getElementById('comments-section');
+  const histSection = document.getElementById('history-section');
+  const cBtn = document.getElementById('tab-link-comments');
+  const hBtn = document.getElementById('tab-link-history');
+
+  if (commSection) commSection.classList.toggle('hidden', !isComm);
+  if (histSection) histSection.classList.toggle('hidden', isComm);
+  
+  if (cBtn && hBtn) {
+    const activeClass = "text-indigo-600 border-indigo-600";
+    const inactiveClass = "text-slate-400 border-transparent hover:text-slate-600";
+    
+    cBtn.className = `text-xs font-bold uppercase tracking-wide pb-1 border-b-2 ${isComm ? activeClass : inactiveClass}`;
+    hBtn.className = `text-xs font-bold uppercase tracking-wide pb-1 border-b-2 ${!isComm ? activeClass : inactiveClass}`;
+  }
+
+  if (!isComm) {
+    lastEventId = null;
+    historyHasMore = true;
+    const cardId = document.getElementById('card-edit-id').value;
+    if (cardId) loadCardHistory(cardId);
+  }
+}
+
+async function loadCardHistory(cardId, isLoadMore = false) {
+  const list = document.getElementById('card-history-list');
+  if (!list || isLoadingHistory || (!isLoadMore && !historyHasMore)) return;
+
+  if (!isLoadMore) {
+    list.innerHTML = '<div id="history-loading-spinner" class="text-center py-4 text-slate-400 animate-pulse text-[10px]">Загрузка истории...</div>';
+    lastEventId = null;
+    historyHasMore = true;
+  } else {
+    const loader = document.createElement('div');
+    loader.id = 'history-more-loader';
+    loader.className = 'text-center py-2 text-[10px] text-slate-400 italic';
+    loader.innerText = 'Загрузка более старых событий...';
+    list.appendChild(loader);
+  }
+
+  isLoadingHistory = true;
+
+  try {
+    let url = `/events?card_id=${cardId}&limit=${EVENTS_LIMIT}`;
+    if (lastEventId) url += `&last_id=${lastEventId}`;
+
+    const events = await api('GET', url);
+
+    document.getElementById('history-loading-spinner')?.remove();
+    document.getElementById('history-more-loader')?.remove();
+    
+    if (!events || events.length === 0) {
+      list.innerHTML = '<div class="text-center py-4 text-slate-400 italic text-[10px]">История событий пуста</div>';
+      historyHasMore = false;
+      return;
+    }
+
+    const html = events.map(ev => {
+      let cfg = {
+        border: "border-slate-200",
+        bg: "bg-slate-50",
+        text: "text-slate-600",
+        icon: "📋"
+      };
+
+      switch (ev.event_type) {
+        case 'CARD_CREATED':
+          cfg = { border: "border-green-300", bg: "bg-green-50", text: "text-green-700", icon: "✨" };
+          break;
+        case 'CARD_MOVED':
+          cfg = { border: "border-blue-300", bg: "bg-blue-50", text: "text-blue-700", icon: "🚀" };
+          break;
+        case 'COMMENT_ADDED':
+        case 'COMMENT_EDITED':
+          cfg = { border: "border-indigo-300", bg: "bg-indigo-50", text: "text-indigo-700", icon: "💬" };
+          break;
+        case 'CARD_ARCHIVED':
+          cfg = { border: "border-amber-300", bg: "bg-amber-50", text: "text-amber-700", icon: "📦" };
+          break;
+        case 'ATTACHMENT_ADDED':
+          cfg = { border: "border-purple-300", bg: "bg-purple-50", text: "text-purple-700", icon: "📎" };
+          break;
+        case 'CARD_DELETED':
+        case 'COMMENT_DELETED':
+          cfg = { border: "border-red-300", bg: "bg-red-50", text: "text-red-700", icon: "🗑️" };
+          break;
+      }
+
+      const username = ev.user ? ev.user.username : 'Система';
+
+      return `
+        <div class="mb-2 p-2 rounded border-l-4 ${cfg.border} ${cfg.bg} shadow-sm">
+          <div class="flex justify-between items-center mb-1 text-[9px]">
+            <span class="font-bold ${cfg.text} uppercase tracking-wider flex items-center">
+              <span class="mr-1">${cfg.icon}</span> ${esc(username)}
+            </span>
+            <span class="text-slate-400 font-medium">${new Date(ev.created_at).toLocaleString()}</span>
+          </div>
+          <div class="text-[11px] ${cfg.text} leading-snug pl-4">
+            ${esc(ev.message)}
+          </div>
+        </div>
+      `;
+    }).join('');
+    if (isLoadMore) {
+      list.insertAdjacentHTML('beforeend', html);
+    } else {
+      list.innerHTML = html;
+    }
+
+    lastEventId = events[events.length - 1].id;
+    if (events.length < EVENTS_LIMIT) {
+      historyHasMore = false;
+    }
+  } catch (err) {
+    console.error("History load error:", err);
+    if (!isLoadMore) list.innerHTML = '<div class="text-center py-4 text-red-400 text-[10px]">Ошибка загрузки</div>';
+  } finally {
+    isLoadingHistory = false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1853,25 +2168,70 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-    if (e.code === 'Space') {
-      const now = Date.now();
+  window.addEventListener('keydown', async (e) => {
+      const isTyping = ['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable;
       
-      if (now - lastSpacePress < DOUBLE_PRESS_DELAY) {
-        const newMode = (currentFilterMode === 'my') ? 'all' : 'my';
-        const filterSelect = document.getElementById('filter-select');
-        if (filterSelect) filterSelect.value = newMode;
-        changeFilterMode(newMode);
-        showToast(newMode === 'my' ? "Режим: Только мои задачи" : "Режим: Все задачи", "info", 1000);
-        
-        lastSpacePress = 0;
-      } else {
-        lastSpacePress = now;
+      const activeModal = document.querySelector('dialog[open]');
+
+      if (isTyping || activeModal) {
+          return;
       }
-    }
+
+      if (e.code === 'Space') {
+          if (e.repeat) return;
+          
+          e.preventDefault(); 
+
+          const now = Date.now();
+          if (now - (window.lastSpacePress || 0) < 300) {
+              const newMode = (currentFilterMode === 'my') ? 'all' : 'my';
+              
+              const filterSelect = document.getElementById('filter-select');
+              if (filterSelect) filterSelect.value = newMode;
+              
+              await changeFilterMode(newMode);
+              
+              toast.info(newMode === 'my' ? "Режим: Только мои задачи" : "Режим: Все задачи");
+              
+              window.lastSpacePress = 0;
+              return;
+          }
+          window.lastSpacePress = now;
+      }
+
+      if (e.code === 'KeyA') {
+          if (e.repeat) return;
+
+          const now = Date.now();
+          if (now - (window.lastAPress || 0) < 300) {
+              e.preventDefault();
+              
+              const newMode = (currentFilterMode === 'archived') ? 'all' : 'archived';
+              await changeFilterMode(newMode);
+              
+              const fSelect = document.getElementById('filter-select');
+              if (fSelect) fSelect.value = newMode;
+
+              toast.info(newMode === 'archived' ? 'Режим: Архив' : 'Режим: Все задачи');
+              
+              window.lastAPress = 0;
+              return;
+          }
+          window.lastAPress = now;
+      }
   });
+
+  const historyContainer = document.getElementById('card-history-list');
+  if (historyContainer) {
+      historyContainer.addEventListener('scroll', () => {
+          if (historyContainer.scrollTop + historyContainer.clientHeight >= historyContainer.scrollHeight - 20) {
+              const cardId = document.getElementById('card-edit-id')?.value;
+              if (cardId && historyHasMore && !isLoadingHistory) {
+                  loadCardHistory(cardId, true);
+              }
+          }
+      });
+  }
 
   const savedUI = sessionStorage.getItem('ui_settings');
   if (savedUI) {
@@ -1926,4 +2286,22 @@ document.addEventListener('click', (e) => {
   const r = e.target.getBoundingClientRect();
   const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
   if (outside) e.target.close();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  const modalCard = document.getElementById('modal-card');
+  if (modalCard) {
+    modalCard.addEventListener('close', () => {
+      const fields = ['card-title-input','card-desc-input','card-assign-search','card-deadline-input'];
+      fields.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
+      document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = false; });
+      document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => { b.style.display = ''; });
+      const dropZone = document.getElementById('drop-zone');
+      if (dropZone) dropZone.style.display = '';
+      const commentInput = document.querySelector('#comments-section .relative.group');
+      if (commentInput) commentInput.style.display = '';
+      const saveBtn = document.querySelector('#modal-card button[onclick="submitCard()"]');
+      if (saveBtn) saveBtn.style.display = '';
+    });
+  }
 });

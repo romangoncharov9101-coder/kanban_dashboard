@@ -17,7 +17,7 @@ async def list_cards(
     sort_by: str = Query('position', regex='^(position|priority|deadline)$'),
     current_user: User = Depends(get_current_user)
 ):
-    return await CardService(db).get_all(column_id=column_id, assigned_to=assigned_to, sort_by=sort_by)
+    return await CardService(db).get_all(column_id=column_id, assigned_to=assigned_to)
 
 @router.post('', response_model=CardOut, status_code=status.HTTP_201_CREATED)
 async def created_card(body: CardCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -30,15 +30,15 @@ async def update_card(card_id: uuid.UUID, body: CardUpdate, db: AsyncSession = D
 
 @router.delete('/{card_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return await CardService(db).delete(card_id)
+    return await CardService(db).delete(card_id, current_user.user_id)
 
 @router.post('/{card_id}/move', response_model=CardOut)
 async def move_card(card_id: uuid.UUID, body: CardMoveRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return await CardService(db).move(card_id, body)
+    return await CardService(db).move(card_id, body, current_user.user_id)
 
 @router.post('/{card_id}/attachments', response_model=AttachmentOut, status_code=status.HTTP_201_CREATED)
 async def upload_attachment(card_id: uuid.UUID, file: UploadFile, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return await CardService(db).upload_card_file(card_id, file)
+    return await CardService(db).upload_card_file(card_id, file, current_user.user_id)
 
 @router.get('/{card_id}/attachments/{attachment_id}/download')
 async def download_attachment(
@@ -54,7 +54,7 @@ async def download_attachment(
     
 @router.delete('/attachments/{attachment_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_attachment(attachment_id: uuid.UUID, db:AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return await CardService(db).delete_attachment(attachment_id)
+    return await CardService(db).delete_attachment(attachment_id, current_user.user_id)
 
 @router.get('/{card_id}/comments', response_model=list[CommentOut])
 async def create_comment(card_id: uuid.UUID, last_id: uuid.UUID | None = Query(None, description='ID для пагинации'), db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -80,3 +80,11 @@ async def update_comment(
 @router.delete('/comment/{comment_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_comment(comment_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await CardService(db).delete_comments(comment_id, current_user.user_id)
+
+@router.post('/{card_id}/archive', response_model=CardOut)
+async def archive_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).archive(card_id, current_user.user_id)
+
+@router.post('/{card_id}/unarchive', response_model=CardOut)
+async def unarchive_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return await CardService(db).unarchive(card_id, current_user.user_id)

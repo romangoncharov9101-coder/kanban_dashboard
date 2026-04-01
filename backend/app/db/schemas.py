@@ -5,6 +5,12 @@ from typing import Any
 from uuid import UUID
 import re
 
+class UserShortOut(BaseModel):
+    user_id: UUID
+    username: str
+
+    model_config = {'from_attributes': True}
+
 #======================================================
 # Attachments (Новое)
 #======================================================
@@ -20,24 +26,46 @@ class AttachmentOut(BaseModel):
 #======================================================
 # Events
 #======================================================
+class EventType(str, Enum):
+    CARD_CREATED = "CARD_CREATED"
+    CARD_EDITED = "CARD_EDITED"
+    CARD_MOVED = "CARD_MOVED"
+    CARD_ARCHIVED = "CARD_ARCHIVED"
+    CARD_RESTORED = "CARD_RESTORED"
+    CARD_DELETED = "CARD_DELETED"
+    COMMENT_ADDED = "COMMENT_ADDED"
+    COMMENT_EDITED = "COMMENT_EDITED"
+    COMMENT_DELETED = "COMMENT_DELETED"
+    ATTACHMENT_ADDED = "ATTACHMENT_ADDED"
+    ATTACHMENT_DELETED = "ATTACHMENT_DELETED"
+    COLUMN_CREATED = "COLUMN_CREATED"
+    COLUMN_DELETED = "COLUMN_DELETED"
+    
+
 class EventOut(BaseModel):
     id: UUID
-    event: str
-    entity_id: str | None
+    card_id: UUID | None
+    user_id: UUID | None
+    user: UserShortOut | None
+    event_type: EventType
+    message: str
     payload: dict[str, Any]
     created_at: datetime
 
     model_config = {'from_attributes': True}
 
+# class EventOut(BaseModel):
+#     id: UUID
+#     event: str
+#     entity_id: str | None
+#     payload: dict[str, Any]
+#     created_at: datetime
+
+#     model_config = {'from_attributes': True}
+
 #======================================================
 # Comments
 #======================================================
-class UserShortOut(BaseModel):
-    user_id: UUID
-    username: str
-
-    model_config = {'from_attributes': True}
-
 class CommentCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=1000)
 
@@ -76,7 +104,7 @@ class CardCreate(BaseModel):
     @classmethod
     def validate_title(cls, v: str):
         if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
-            raise ValueError('Название карточки может содержать только латинские или кирилические буквы без пробелов и знаков')
+            raise ValueError('Название карточки может содержать только латинские или кирилические буквы знаков')
         return v
     
     @field_validator('deadline')
@@ -98,6 +126,7 @@ class CardUpdate(BaseModel):
     assigned_to: UUID | None = None
     deadline: datetime | None = None
     priority: CardPriority | None = None
+    is_archived: bool | None = None
 
     @field_validator('deadline')
     @classmethod
@@ -105,7 +134,7 @@ class CardUpdate(BaseModel):
         if v is None: return v
         if v.tzinfo is None: v = v.replace(tzinfo=timezone.utc)
         if v < datetime.now(timezone.utc):
-            raise ValueError('Де  длайн не может быть в прошлом')
+            raise ValueError('Дедлайн не может быть в прошлом')
         return v
 
 class CardMoveRequest(BaseModel):
@@ -121,6 +150,7 @@ class CardOut(BaseModel):
     created_by: UUID
     position: int
     priority: CardPriority
+    is_archived: bool
 
     created_at: datetime
     updated_at: datetime | None
@@ -141,6 +171,11 @@ class CardOut(BaseModel):
 
 class DetailedOut(CardOut):
     comments: list[CommentOut] = []
+
+class CardHistoryOut(BaseModel):
+    card_id: UUID
+    title: str
+    logs: list[EventOut]
 
 #======================================================
 # Columns

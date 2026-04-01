@@ -5,17 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TaskBoard MVP</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="./static/scripts.js?v=1.0.4"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <script defer src="./static/scripts.js?v=1.1.1"></script>
   <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
+    body { font-family: 'Inter', system-ui, sans-serif; touch-action: pan-y; }
+    body.dragging-active, 
+    body.dragging-active * {
+        user-select: none !important;
+        -webkit-user-select: none !important;
+        -webkit-touch-callout: none !important;
+    }
+
     .card-ghost  { opacity:0!important; background:#e0e7ff; border:2px dashed #818cf8; border-radius:.5rem; min-height:56px; pointer-events:none; }
-    .card-drag   { opacity:.97; box-shadow:0 12px 28px rgba(0,0,0,.20); transform:rotate(1deg) scale(1.02); cursor:grabbing!important; }
+    .card-drag {transition: none !important; position: fixed !important; z-index: 99999 !important; pointer-events: none !important; width: 270px !important; margin: 0 !important; opacity: 1 !important;}
     .card-chosen { cursor:grab; }
     .col-ghost   { opacity:0!important; border:2px dashed #a5b4fc; border-radius:.75rem; background:#eef2ff; min-width:270px; pointer-events:none; }
-    .col-drag    { opacity:.96; box-shadow:0 16px 40px rgba(0,0,0,.22); transform:rotate(.8deg) scale(1.01); cursor:grabbing!important; }
+    .col-drag    { opacity:1 !important; box-shadow:0 20px 48px rgba(0,0,0,.28); transform:rotate(.8deg) scale(1.02); cursor:grabbing!important; z-index:9999; background:#fff; border-radius:.75rem; }
     .col-chosen  { cursor:grab; }
     .remote-drag { outline:2px solid #f59e0b; outline-offset:2px; background:#fffbeb!important; }
+    .sortable-fallback { opacity: 1 !important; display: block !important; position: fixed !important; z-index: 9999 !important;}
     .card-item   { cursor:grab; transition:box-shadow .12s; }
     .card-item:hover { box-shadow:0 3px 10px rgba(0,0,0,.09); }
     .col-handle  { cursor:grab; }
@@ -73,6 +81,10 @@
       main { padding:0.75rem; }
     }
 
+    /* touch-action: none на draggable-элементах чтобы браузер не перехватывал touch */
+    .card { touch-action: none; }
+    .col-handle { touch-action: none; }
+
     /* ── Comments input ────────────────────────────────────────────── */
     .comment-item { border-bottom: 1px solid #f1f5f9; padding: 0.75rem 0; }
     .comment-item:last-child { border-bottom: none; }
@@ -104,6 +116,19 @@
 
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Отключаем визуальный указатель возможности перетаскивания в архиве */
+    #board.archive-mode .column {
+        cursor: default !important;
+    }
+
+    #board.archive-mode .col-handle {
+        cursor: default !important;
+    }
+
+    #board.archive-mode .card-item {
+        cursor: default !important;
+    }
   </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -112,58 +137,141 @@
 <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none w-80 max-w-[calc(100vw-2rem)]"></div>
 
 <!-- ── HEADER ──────────────────────────────────────────────────────────── -->
-<header class="bg-white shadow-sm px-6 py-3 flex items-center justify-between">
-  <h1 class="text-lg font-bold text-indigo-600 flex items-center gap-2">
-    <span>📋</span><span class="hidden sm:inline">TaskBoard</span>
-  </h1>
-  <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-    <div id="auth-area" class="flex items-center gap-1 sm:gap-2">
-      <input id="auth-username" type="text" placeholder="Логин"
-        class="border rounded px-2 py-1.5 text-sm w-24 sm:w-28" maxlength="100"
-        onkeydown="if(event.key==='Enter') doLogin()" />
-      <input id="auth-password" type="password" placeholder="Пароль"
-        class="border rounded px-2 py-1.5 text-sm w-24 sm:w-28" maxlength="128"
-        onkeydown="if(event.key==='Enter') doLogin()" />
-      <button onclick="doLogin()"
-        class="bg-indigo-600 text-white px-2.5 py-1.5 rounded text-sm hover:bg-indigo-700 whitespace-nowrap">Войти</button>
-      <button onclick="doRegister()"
-        class="bg-emerald-600 text-white px-2.5 py-1.5 rounded text-sm hover:bg-emerald-700 whitespace-nowrap">Регистр.</button>
+<header class="bg-white shadow-sm sticky top-0 z-50">
+
+  <!-- ── Верхняя строка: лого + бургер (мобиль) / все контролы (десктоп) ── -->
+  <div class="px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+
+    <!-- Лого -->
+    <h1 class="text-lg font-bold text-indigo-600 flex items-center gap-2 flex-shrink-0">
+      <span>📋</span><span>TaskBoard</span>
+    </h1>
+
+    <!-- Десктоп-контролы (sm и выше) -->
+    <div class="hidden sm:flex items-center gap-2 flex-1 justify-end">
+
+      <!-- Auth -->
+      <div id="auth-area-desktop" class="flex items-center gap-2">
+        <input id="auth-username" type="text" placeholder="Логин"
+          class="border rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400" maxlength="100"
+          onkeydown="if(event.key==='Enter') doLogin()" />
+        <input id="auth-password" type="password" placeholder="Пароль"
+          class="border rounded-lg px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400" maxlength="128"
+          onkeydown="if(event.key==='Enter') doLogin()" />
+        <button onclick="doLogin()"
+          class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-indigo-700 font-medium">Войти</button>
+        <button onclick="doRegister()"
+          class="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-emerald-700 font-medium">Регистр.</button>
+      </div>
+
+      <!-- User info + filters -->
+      <div id="user-info" class="hidden items-center gap-2 text-sm text-slate-600">
+        <div class="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-lg border border-slate-200">
+          <label for="filter-select" class="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Фильтр:</label>
+          <select id="filter-select" onchange="changeFilterMode(this.value)"
+            class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
+            <option value="all">Все задачи</option>
+            <option value="my" title="Двойное нажатие ПРОБЕЛ для быстрого приминения">Мои задачи</option>
+            <option value="created">Созданные мной</option>
+            <option value="archived" title="Двойное нажатие TAB для быстрого приминения">Архивированные</option>
+            <option disabled>─── По приоритету ───</option>
+            <option value="p-high">Высокий</option>
+            <option value="p-medium">Средний</option>
+            <option value="p-low">Низкий</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-lg border border-slate-200">
+          <label for="sort-select" class="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Сорт.:</label>
+          <select id="sort-select" onchange="changeSortMode(this.value)"
+            class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
+            <option value="position">По позициям</option>
+            <option value="priority">По приоритету</option>
+            <option value="deadline">По дедлайну</option>
+          </select>
+        </div>
+        <span class="h-4 w-px bg-slate-200"></span>
+        <span class="font-semibold text-slate-800 flex items-center gap-1.5">
+          <span class="bg-indigo-100 text-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-[10px]">👤</span>
+          <span id="current-username"></span>
+        </span>
+        <button onclick="doLogout()"
+          class="text-xs text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg px-2.5 py-1.5 transition-colors bg-white">Выйти</button>
+      </div>
     </div>
-    <!-- Sorting, filtering and User info -->
-    <div id="user-info" class="hidden items-center gap-3 text-sm text-slate-600">
-      <div class="flex items-center gap-2 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
-        <label for="filter-select" class="text-[10px] uppercase font-bold text-slate-400 ml-1">Фильтр:</label>
-        <select id="filter-select" onchange="changeFilterMode(this.value)" 
-          class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
-          <option value="all">Все задачи</option>
-          <option value="my" title="Двойное нажатие клавиши пробел для быстрой активации.">Мои задачи</option>
-          <option value="created">Созданные мной</option>
-          <option disabled>─── По приоритету ───</option>
-          <option value="p-high">Высокий</option>
-          <option value="p-medium">Средний</option>
-          <option value="p-low">Низкий</option>
-        </select>
-      </div>
-      <div class="flex items-center gap-2 bg-slate-100 px-2 py-1 rounded-lg border border-slate-200">
-        <label for="sort-select" class="text-[10px] uppercase font-bold text-slate-400 ml-1">Сортировка:</label>
-        <select id="sort-select" onchange="changeSortMode(this.value)" 
-          class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none">
-          <option value="position">По позициям</option>
-          <option value="priority">По приоритету</option>
-          <option value="deadline">По дедлайну</option>
-        </select>
+
+    <!-- Бургер (только мобиль) -->
+    <button id="header-burger" class="sm:hidden flex-shrink-0 p-2 rounded-lg text-slate-500 hover:bg-slate-100 active:bg-slate-200 transition-colors"
+      aria-label="Меню"
+      onclick="var d=document.getElementById('header-drawer');var open=d.style.maxHeight&&d.style.maxHeight!=='0px';d.style.maxHeight=open?'0px':d.scrollHeight+'px';this.setAttribute('aria-expanded',!open)">
+      <svg class="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ── Мобильный drawer ── -->
+  <div id="header-drawer"
+    style="max-height:0; overflow:hidden; transition:max-height 0.3s ease"
+    class="sm:hidden border-t border-slate-100 bg-white">
+    <div class="px-4 py-4 flex flex-col gap-3">
+
+      <!-- Форма авторизации -->
+      <div id="auth-area" class="flex flex-col gap-2">
+        <div class="flex gap-2">
+          <input id="auth-username-m" type="text" placeholder="Логин"
+            class="flex-1 border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" maxlength="100"
+            onkeydown="if(event.key==='Enter') doLogin()" />
+          <input id="auth-password-m" type="password" placeholder="Пароль"
+            class="flex-1 border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" maxlength="128"
+            onkeydown="if(event.key==='Enter') doLogin()" />
+        </div>
+        <div class="flex gap-2">
+          <button onclick="doLogin()"
+            class="flex-1 bg-indigo-600 text-white py-2.5 rounded-lg text-sm hover:bg-indigo-700 font-semibold">Войти</button>
+          <button onclick="doRegister()"
+            class="flex-1 bg-emerald-600 text-white py-2.5 rounded-lg text-sm hover:bg-emerald-700 font-semibold">Регистрация</button>
+        </div>
       </div>
 
-      <span class="h-4 w-[1px] bg-slate-200 mx-1"></span>
+      <!-- Блок залогиненного пользователя -->
+      <div id="user-info-mobile" class="hidden flex-col gap-3">
+        <div class="flex items-center justify-between">
+          <span class="font-semibold text-slate-800 flex items-center gap-2">
+            <span class="bg-indigo-100 text-indigo-600 w-8 h-8 rounded-full flex items-center justify-center">👤</span>
+            <span id="current-username-m" class="text-sm"></span>
+          </span>
+          <button onclick="doLogout()"
+            class="text-xs text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg px-3 py-2 bg-white">Выйти</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div class="flex items-center gap-1.5 bg-slate-100 px-2 py-2 rounded-lg border border-slate-200">
+            <label class="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Фильтр:</label>
+            <select id="filter-select-m" onchange="changeFilterMode(this.value);var d=document.getElementById('filter-select');if(d)d.value=this.value"
+              class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none flex-1 min-w-0">
+              <option value="all">Все</option>
+              <option value="my">Мои</option>
+              <option value="created">Созданные</option>
+              <option value="archived">Архив</option>
+              <option value="p-high">Высокий</option>
+              <option value="p-medium">Средний</option>
+              <option value="p-low">Низкий</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-1.5 bg-slate-100 px-2 py-2 rounded-lg border border-slate-200">
+            <label class="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Сорт.:</label>
+            <select id="sort-select-m" onchange="changeSortMode(this.value);var d=document.getElementById('sort-select');if(d)d.value=this.value"
+              class="bg-transparent border-none text-xs font-semibold text-slate-700 focus:ring-0 cursor-pointer outline-none flex-1 min-w-0">
+              <option value="position">Позиция</option>
+              <option value="priority">Приоритет</option>
+              <option value="deadline">Дедлайн</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
-      <span class="font-semibold text-slate-800 flex items-center gap-1.5">
-        <span class="bg-indigo-100 text-indigo-600 w-6 h-6 rounded-full flex items-center justify-center text-[10px]">👤</span>
-        <span id="current-username"></span>
-      </span>
-      <button onclick="doLogout()"
-        class="text-xs text-slate-400 hover:text-red-500 border border-slate-200 rounded px-2 py-1 transition-colors bg-white">Выйти</button>
     </div>
   </div>
+
 </header>
 
 <!-- ── MAIN ────────────────────────────────────────────────────────────── -->
@@ -339,8 +447,8 @@
         </button>
       </div>
       <!-- Comments -->
-    <div id="comments-section" class="hidden border-t border-slate-100 pt-4 flex flex-col">
-        <label id="comments-label" class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide flex justify-between">
+    <div id="main-comments-section" class="hidden border-t border-slate-100 pt-4 flex flex-col">
+        <!-- <label id="comments-label" class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide flex justify-between">
           Комментарии
         </label>
         
@@ -387,10 +495,80 @@
             <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('😂')">😂</button>
           </div>
         </div>
+      </div> -->
+      <div id="card-modal-tabs" class="pt-4 flex gap-4 mb-3">
+        <button type="button" onclick="switchCardTab('comments')" id="tab-link-comments"
+          class="text-xs font-bold uppercase tracking-wide text-indigo-600 border-b-2 border-indigo-600 pb-1">
+          Комментарии
+        </button>
+        <button type="button" onclick="switchCardTab('history')" id="tab-link-history"
+          class="text-xs font-bold uppercase tracking-wide text-slate-400 border-b-2 border-transparent pb-1 hover:text-slate-600">
+          История
+        </button>
+      </div>
+
+      <div id="comments-section" class="flex flex-col">
+        <label id="comments-label" class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide flex justify-between">
+          Комментарии
+        </label>
+        
+        <div id="comments-list" 
+             class="bg-slate-50/50 rounded-xl border border-slate-100 p-3 mb-4 max-h-[280px] overflow-y-auto thin-scroll space-y-3 shadow-inner">
+          <p class="text-center text-slate-400 text-xs py-4">Нет комментариев</p>
+        </div>
+
+        <div class="relative group">
+          <textarea id="card-new-comment" rows="2" maxlength="1000" 
+            placeholder="Напишите комментарий..."
+            class="no-scrollbar border border-slate-300 rounded-xl w-full px-3 py-2 pr-20 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-all shadow-sm group-hover:shadow-md group-hover:border-slate-400"
+            onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); addCommentAction(); }"></textarea>
+          
+          <div class="absolute right-2 bottom-2 flex items-center gap-1">
+            <button type="button" onclick="toggleEmojiPicker()" 
+              class="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
+              title="Добавить эмодзи">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+            <button type="button" onclick="addCommentAction()"
+              class="p-1.5 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors"
+              title="Отправить (Enter)">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+              </svg>
+            </button>
+          </div>
+
+          <div id="emoji-picker" class="emoji-picker hidden animate-bounce-in shadow-2xl border-indigo-100">
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('👍')">👍</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('🔥')">🔥</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('✅')">✅</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('🚀')">🚀</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('🤔')">🤔</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('👏')">👏</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('👀')">👀</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('🤝')">🤝</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('💡')">💡</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('⚠️')">⚠️</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('❤️')">❤️</button>
+            <button type="button" class="emoji-btn text-lg" onclick="insertEmoji('😂')">😂</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="history-section" class="hidden flex flex-col">
+        <label class="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">
+          История изменений
+        </label>
+        <div id="card-history-list" 
+             class="bg-slate-50/50 rounded-xl border border-slate-100 p-3 max-h-[350px] overflow-y-auto thin-scroll space-y-2 shadow-inner text-[11px] font-mono">
+          <p class="text-center text-slate-400 py-4 italic">Загрузка истории...</p>
+        </div>
       </div>
     </div>
     <!-- Footer -->
-    <div class="flex justify-end gap-2 px-6 pb-5 pt-2 border-t border-slate-100">
+    <div class="flex justify-end gap-2 px-6 pb-5 pt-2">
       <button onclick="document.getElementById('modal-card').close()"
         class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">Отмена</button>
       <button onclick="submitCard()"
