@@ -6,7 +6,6 @@ Create Date: 2026-03-30 14:07:58.075331
 
 """
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -37,9 +36,9 @@ def upgrade() -> None:
                existing_type=postgresql.TIMESTAMP(timezone=True),
                nullable=False,
                existing_server_default=sa.text('CURRENT_TIMESTAMP'))
-    op.create_index(op.f('ix_events_card_id'), 'events', ['card_id'], unique=False)
-    op.create_index(op.f('ix_events_created_at'), 'events', ['created_at'], unique=False)
-    op.create_index(op.f('ix_events_event_type'), 'events', ['event_type'], unique=False)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_events_card_id ON events (card_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_events_created_at ON events (created_at)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_events_event_type ON events (event_type)")
     op.drop_constraint(op.f('events_user_id_fkey'), 'events', type_='foreignkey')
     op.create_foreign_key(None, 'events', 'users', ['user_id'], ['user_id'], ondelete='SET NULL')
     # ### end Alembic commands ###
