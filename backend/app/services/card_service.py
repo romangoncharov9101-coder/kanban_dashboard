@@ -458,7 +458,7 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.CARD_EDITED,
-            message=f"Удален файл: {filename}",
+            message=f"Удален файл: {attachment.filename}",
             card_id=card_id,
             user_id=user_id,
             payload=payload

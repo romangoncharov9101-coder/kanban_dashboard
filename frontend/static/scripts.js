@@ -35,7 +35,7 @@ const COMMENTS_LIMIT = 20;
 const EVENTS_LIMIT = 20;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TOAST / ALERTS  — заменяем все alert() красивыми тостами
+// TOAST / ALERTS
 // ─────────────────────────────────────────────────────────────────────────────
 // type: 'error' | 'warn' | 'success' | 'info'
 function showToast(message, type = 'info', duration = 3000, quite = false) {
@@ -83,7 +83,7 @@ function showToast(message, type = 'info', duration = 3000, quite = false) {
  
   const msgEl = document.createElement('span');
   msgEl.className = 'text-sm text-slate-700 flex-1 min-w-0 break-words';
-  msgEl.textContent = message;   // textContent — XSS-safe
+  msgEl.textContent = message;
  
   const closeBtn = document.createElement('button');
   closeBtn.className = 'text-slate-400 hover:text-slate-600 ml-1 flex-shrink-0 text-lg leading-none';
@@ -124,7 +124,6 @@ async function api(method, path, body, quite = false) {
 
   const res = await fetch(API+path, opts);
   if (res.status === 204) return null;
-  // const json = await res.json();
   let json = null;
   const contentType = res.headers.get("content-type");
   if (contentType && contentType.includes("application/json")) {
@@ -255,7 +254,6 @@ async function doLogout() {
 async function _uiLoggedIn(user) {
   currentUser = { user_id: user.user_id, username: user.username };
 
-  // Desktop
   const authDesktop = document.getElementById('auth-area-desktop');
   if (authDesktop) authDesktop.classList.add('hidden');
   const uiDesktop = document.getElementById('user-info');
@@ -263,7 +261,6 @@ async function _uiLoggedIn(user) {
   const unDesktop = document.getElementById('current-username');
   if (unDesktop) unDesktop.textContent = currentUser.username;
 
-  // Mobile
   const authMobile = document.getElementById('auth-area');
   if (authMobile) authMobile.classList.add('hidden');
   const uiMobile = document.getElementById('user-info-mobile');
@@ -284,13 +281,11 @@ async function _uiLoggedIn(user) {
 function _uiLoggedOut() {
   currentUser = null;
 
-  // Desktop
   const authDesktop = document.getElementById('auth-area-desktop');
   if (authDesktop) authDesktop.classList.remove('hidden');
   const uiDesktop = document.getElementById('user-info');
   if (uiDesktop) { uiDesktop.classList.add('hidden'); uiDesktop.classList.remove('flex'); }
 
-  // Mobile
   const authMobile = document.getElementById('auth-area');
   if (authMobile) authMobile.classList.remove('hidden');
   const uiMobile = document.getElementById('user-info-mobile');
@@ -298,7 +293,6 @@ function _uiLoggedOut() {
 
   document.getElementById('btn-add-col').disabled = true;
 
-  // Clear passwords in both inputs
   const pwDesktop = document.getElementById('auth-password');
   if (pwDesktop) pwDesktop.value = '';
   const pwMobile = document.getElementById('auth-password-m');
@@ -470,7 +464,6 @@ function _sendDragEvent(cardId, srcColId, curColId, curPos) {
 // ─────────────────────────────────────────────────────────────────────────────
 // DATA LOADING
 // ─────────────────────────────────────────────────────────────────────────────
-
 async function loadBoard() {
   const data = await api('GET', '/board/init');
   columns = data.columns || [];
@@ -629,7 +622,7 @@ function updateColumnsVisibility() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RENDER CARD  — preview image, deadline badge, download button
+// RENDER CARD
 // ─────────────────────────────────────────────────────────────────────────────
 function _deadlineBadge(deadline) {
   if (!deadline) return '';
@@ -821,7 +814,6 @@ async function unarchiveCardAction(e, cardId) {
   if (res) {
     toast.success('Карточка восстановлена из архива');
     
-    // Мгновенно убираем карточку из списка архива и перерисовываем
     const card = cards.find(c => c.id === cardId);
     if (card) card.is_archived = false;
     renderBoard(); 
@@ -928,10 +920,8 @@ function _renderAttachmentsList(attachments) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ЗАГРУЗКА ФАЙЛОВ — drag-and-drop, file input, paste из буфера
+// ЗАГРУЗКА ФАЙЛОВ
 // ─────────────────────────────────────────────────────────────────────────────
-
-// [ADDED] Обработчик drop на зону
 function handleFileDrop(event) {
   event.preventDefault();
   const zone = document.getElementById('drop-zone');
@@ -940,16 +930,12 @@ function handleFileDrop(event) {
   _processFiles(files);
 }
 
-// [ADDED] Обработчик выбора через file input (поддерживает multiple)
 function handleFileInputChange(event) {
   const files = Array.from(event.target.files);
-  event.target.value = ''; // сброс чтобы можно было загрузить тот же файл снова
+  event.target.value = '';
   _processFiles(files);
 }
 
-// [ADDED] Единая точка входа для файлов — решает куда их отправить:
-// если редактируем существующую карточку (есть card-edit-id) → сразу на сервер,
-// если создаём новую → кладём в pendingFiles, загрузим после POST /cards.
 async function _processFiles(files) {
   const MAX_SIZE = 10 * 1024 * 1024;
   const ALLOWED  = ['image/', 'application/pdf', 'application/msword',
@@ -959,27 +945,19 @@ async function _processFiles(files) {
   const cardId = document.getElementById('card-edit-id').value;
 
   for (const file of files) {
-    // Валидация размера
     if (file.size > MAX_SIZE) {
       toast.warn(`«${file.name}» слишком большой (макс. 5 МБ)`); continue;
     }
-    // Мягкая проверка типа (не блокируем строго — сервер проверит сам)
     const allowed = ALLOWED.some(t => file.type.startsWith(t));
     if (!allowed) {
       toast.warn(`«${file.name}» — неподдерживаемый тип файла`); continue;
     }
 
-    // if (cardId) {
-    //   await _uploadFileTo(cardId, file);
-    // } else {
-    //   _addToPending(file);
-    // }
-    _addToPending(file); // ADDED
+    _addToPending(file);
   }
-  _refreshAttachmentsUI(); // ADDED
+  _refreshAttachmentsUI();
 }
 
-// ADDED
 function _refreshAttachmentsUI() {
   const cardId = document.getElementById('card-edit-id').value;
   const card = cards.find(c => c.id === cardId);
@@ -996,7 +974,6 @@ function _refreshAttachmentsUI() {
 }
 
 function _addToPending(file) {
-  // Не добавляем дубликаты
   if (pendingFiles.find(f => f.name === file.name && f.size === file.size)) {
     toast.info(`«${file.name}» уже в списке`); return;
   }
@@ -1604,23 +1581,18 @@ async function openEditCard(cardId) {
     const el = document.getElementById(id);
     if (el) el.disabled = isArchived;
   });
-  // Радио-кнопки приоритета
   document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = isArchived; });
-  // Кнопки дедлайн-пресетов и очистки
   document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
     b.style.display = isArchived ? 'none' : '';
   });
-  // Зона вложений — скрыть в архиве
   const dropZone = document.getElementById('drop-zone');
   if (dropZone) dropZone.style.display = isArchived ? 'none' : '';
-  // Поле комментария — скрыть в архиве
   const commentInput = document.querySelector('#comments-section .relative.group');
   if (commentInput) commentInput.style.display = isArchived ? 'none' : '';
 
   const commentField = document.getElementById('card-new-comment');
   if (commentField) commentField.value = '';
 
-  // Кнопка сохранить / footer
   const saveBtn = document.querySelector('#modal-card button[onclick="submitCard()"]');
   if (saveBtn) saveBtn.style.display = isArchived ? 'none' : '';
 
@@ -1688,7 +1660,6 @@ async function openEditCard(cardId) {
 
 let lastSubmitTime = 0;
 async function submitCard() {
-  // Запрет сохранения в режиме архива
   if (currentFilterMode === 'archived') {
     toast.warn('В режиме архива редактирование недоступно');
     return;
