@@ -17,6 +17,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     online: Mapped[bool] = mapped_column(Boolean, default=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
 
 class Column(Base):
     __tablename__ = 'columns'
@@ -112,15 +113,6 @@ class Event(Base):
 
     card: Mapped['Card'] = relationship('Card', back_populates='events')
     user: Mapped['User'] = relationship('User')
-
-# class Event(Base):
-#     __tablename__ = 'events'
-
-#     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-#     event: Mapped[str] = mapped_column(String(50), nullable=False)
-#     entity_id : Mapped[str | None] = mapped_column(String(36), nullable=True)
-#     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-#     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 class Session(Base):
     __tablename__ = 'sessions'

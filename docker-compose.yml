@@ -22,14 +22,12 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgresql+asyncpg://taskboard:taskboard@db:5432/taskboard
-      # [EDITED] CORS_ORIGINS теперь только localhost:8080 — один origin через nginx proxy
       CORS_ORIGINS: "http://localhost:8080"
       LOG_LEVEL: INFO
       EVENT_CLEANUP_INTERVAL: 300
       EVENT_MAX_AGE_SECONDS: 86400
       SESSION_SECRET_KEY: "change-me-generate-with-secrets-token-hex-32"
       EXPOSE_DOCS: "false"
-    # [EDITED] Бэкенд больше не публикует порт наружу — только через nginx
     expose:
       - "8000"
     ports:
@@ -50,7 +48,6 @@ services:
       - "9080:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
-      # [ADDED] nginx конфиг: проксируем /api/ и /ws на бэкенд
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - backend

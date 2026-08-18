@@ -103,8 +103,8 @@ class CardCreate(BaseModel):
     @field_validator('title')
     @classmethod
     def validate_title(cls, v: str):
-        if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
-            raise ValueError('Название карточки может содержать только латинские или кирилические буквы знаков')
+        if not v.strip():
+            raise ValueError('Название карточки не может быть пустым')
         return v
     
     @field_validator('deadline')
@@ -185,9 +185,9 @@ class ColumnCreate(BaseModel):
 
     @field_validator('name')
     @classmethod
-    def validate_username(cls, v: str):
-        if not re.match(r'^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]+$', v):
-            raise ValueError('Название колонки может содержать только латинские или кирилические буквы без пробелов и знаков')
+    def validate_name(cls, v: str):
+        if not v.strip():
+            raise ValueError('Название колонки не может быть пустым')
         return v
 
 class ColumnUpdate(BaseModel):

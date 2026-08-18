@@ -1,11 +1,8 @@
 'use strict';
-const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 const API = window.location.origin + '/api';
 
-const WS_BASE = isLocal 
-    ? 'ws://localhost:8000' 
-    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATE
