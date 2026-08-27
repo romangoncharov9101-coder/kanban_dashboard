@@ -45,7 +45,7 @@ services:
   frontend:
     image: nginx:alpine
     ports:
-      - "9080:80"
+      - "9070:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
