@@ -12,10 +12,11 @@ from app.exceptions import (
     validation_exception_handler,
     generic_exception_handler,
 )
-from app.api_routes import columns, cards, users, events, notifications, board
+from app.api_routes import columns, cards, users, events, notifications, board, admin, projects
 from app.router import router as ws_router
 from app.manager import manager
 from app.tasks import event_cleanup_task, session_cleanup_task
+from app.core.bootstrap import ensure_admin_exists
  
 setup_logging()
 logger = get_logger("main")
@@ -24,6 +25,11 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info('Starting TaskBoard MVP')
+
+    # Администратор создаётся из .env — это единственный способ
+    # завести первый аккаунт, самостоятельной регистрации нет.
+    await ensure_admin_exists()
+
     broadcast_task = asyncio.create_task(manager.broadcast_loop())
     cleanup_task = asyncio.create_task(event_cleanup_task())
     sess_cleanup_task  = asyncio.create_task(session_cleanup_task())
@@ -52,7 +58,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -68,6 +74,8 @@ app.include_router(users.router)
 app.include_router(events.router)
 app.include_router(notifications.router)
 app.include_router(board.router)
+app.include_router(admin.router)
+app.include_router(projects.router)
 app.include_router(ws_router)
 
 @app.get('/health', tags=['meta'])

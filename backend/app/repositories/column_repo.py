@@ -7,9 +7,18 @@ class ColumnRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_all(self) -> list[Column]:
+    async def get_all(self, project_id: uuid.UUID | None = None) -> list[Column]:
+        q = select(Column).order_by(Column.position)
+        if project_id is not None:
+            q = q.where(Column.project_id == project_id)
+        result = await self.session.execute(q)
+        return list(result.scalars().all())
+
+    async def get_for_projects(self, project_ids: list[uuid.UUID]) -> list[Column]:
+        if not project_ids:
+            return []
         result = await self.session.execute(
-            select(Column).order_by(Column.position)
+            select(Column).where(Column.project_id.in_(project_ids)).order_by(Column.position)
         )
         return list(result.scalars().all())
     
@@ -19,10 +28,11 @@ class ColumnRepository:
         )
         return result.scalar_one_or_none()
     
-    async def get_max_position(self) -> int:
-        result = await self.session.execute(
-            select(func.max(Column.position))
-        )
+    async def get_max_position(self, project_id: uuid.UUID | None = None) -> int:
+        q = select(func.max(Column.position))
+        if project_id is not None:
+            q = q.where(Column.project_id == project_id)
+        result = await self.session.execute(q)
         val = result.scalar_one_or_none()
         return val if val is not None else -1
     
@@ -32,17 +42,20 @@ class ColumnRepository:
         )
         return result.scalar_one()
     
-    async def create(self, name: str, position: int) -> Column:
-        col = Column(id=uuid.uuid4(), name=name, position=position)
+    async def create(self, name: str, position: int, project_id: uuid.UUID, is_user_movable: bool = False) -> Column:
+        col = Column(id=uuid.uuid4(), name=name, position=position,
+                     project_id=project_id, is_user_movable=is_user_movable)
         self.session.add(col)
         await self.session.flush()
         await self.session.refresh(col)
         return col
 
     async def update(self, column: Column, **kwargs) -> Column:
+        # Явно присваиваем всё, что пришло: сервис передаёт только
+        # реально изменившиеся поля, а False — валидное значение
+        # (например is_user_movable=False).
         for k, v in kwargs.items():
-            if v is not None:
-                setattr(column, k, v)
+            setattr(column, k, v)
         await self.session.flush()
         await self.session.refresh(column)
         return column
@@ -58,8 +71,8 @@ class ColumnRepository:
             .values(position=Column.position + delta)
         )
 
-    async def normalize_positions(self) -> None:
-        cols = await self.get_all()
+    async def normalize_positions(self, project_id: uuid.UUID | None = None) -> None:
+        cols = await self.get_all(project_id)
         for idx, col in enumerate(cols):
             if col.position != idx:
                 col.position = idx

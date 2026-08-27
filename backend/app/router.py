@@ -1,4 +1,3 @@
-import uuid
 import asyncio
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -13,16 +12,16 @@ router = APIRouter()
 
 @router.websocket('/ws')
 async def websocke_enpoint(
-    ws:WebSocket,
+    ws: WebSocket,
     user_id: str | None = Query(default=None),
 ):
     user = await get_current_user_ws(ws)
     await manager.connect(ws)
 
     if user:
-        manager.bind_user(str(user.user_id), ws)
+        manager.bind_user(str(user.user_id), ws, role=user.role.value)
         async with AsyncSessionLocale() as session:
-            try: 
+            try:
                 repo = UserRepository(session)
                 u = await repo.get_user_by_id(user.user_id)
                 if u:
@@ -34,7 +33,7 @@ async def websocke_enpoint(
                         {'user_id': str(u.user_id), 'username': u.username},
                     )
             except Exception as exc:
-                logger.warning(f'Could not set user onlime: {exc}')
+                logger.warning(f'Could not set user online: {exc}')
 
     sender_task = asyncio.create_task(manager.sender_loop(ws))
 

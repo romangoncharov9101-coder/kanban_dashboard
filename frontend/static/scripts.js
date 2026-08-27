@@ -12,6 +12,20 @@ let ws = null, wsTimer = null;
 let columns = [], cards = [], onlineUsers = [];
 let boardSortable = null;
 let searchTimeout = null;
+let selectedAssignees = [];   // [{user_id, username}] в открытой модалке карточки
+let projects = [];            // дерево проектов, доступное текущему пользователю
+let currentProject = null;    // {id, name, parent_id, is_root, can_manage}
+let subSections = [];         // сводка подпроектов на корневом проекте
+let selectedOwners = [];      // ответственные в модалке проекта
+const GLOBAL_BOARD_ID = '__all__';  // псевдо-проект «Все проекты» (только админ)
+
+let globalUserFilter = '';   // user_id: показывать только его задачи (вкладка «Все проекты»)
+
+function isGlobalBoard() {
+  return !!currentProject && String(currentProject.id) === GLOBAL_BOARD_ID;
+}
+let cardModalReadOnly = false;  // полный запрет редактирования (архив, чужой проект)
+let cardModalCommentOnly = false; // только комментарии: назначен исполнителем, но не автор
 let pendingFiles = [];
 let pendingDeletions = [];
 let currentSortMode = 'position';
@@ -207,18 +221,49 @@ function esc(s) {
 const _usernameRe = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9]{1,100}$/;
 const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]{1,100}$/;
  
-async function doRegister() {
-  const u = (document.getElementById('auth-username')?.value || document.getElementById('auth-username-m')?.value || '').trim();
-  const p = document.getElementById('auth-password')?.value || document.getElementById('auth-password-m')?.value || '';
+// Самостоятельной регистрации нет: аккаунты заводит администратор.
+// Роли: ADMIN — управляет пользователями; TEAM_LEAD — ведёт доску;
+// USER — видит только свои задачи и двигает их по разрешённым категориям.
+const ROLE_LABELS = {
+  ADMIN:     { text: 'Админ',     cls: 'bg-rose-100 text-rose-700' },
+  TEAM_LEAD: { text: 'Постановщик', cls: 'bg-violet-100 text-violet-700' },
+  USER:      { text: 'Исполнитель', cls: 'bg-slate-100 text-slate-600' },
+};
 
-  if (!_usernameRe.test(u)) return toast.warn('Никнейм: только буквы и цифры, 1–100 символов');
-  if (p.length < 6) return toast.warn('Пароль: минимум 6 символов');
+function isAdmin()   { return currentUser?.role === 'ADMIN'; }
+function isManager() { return currentUser?.role === 'ADMIN' || currentUser?.role === 'TEAM_LEAD'; }
 
-  const d = await api('POST', '/users/register', { username: u, password: p });
-  if (!d) return;
-  await _uiLoggedIn(d);
-  await loadBoard();
-  toast.success(`Добро пожаловать, ${d.username}!`);
+// Право менять саму задачу принадлежит админу и АВТОРУ задачи.
+// Постановщик, которого лишь назначили исполнителем чужой задачи,
+// её не редактирует — только комментирует и двигает.
+function canManageCard(card) {
+  if (!currentUser || !card) return false;
+  if (isAdmin()) return true;
+  return currentUser.role === 'TEAM_LEAD'
+      && String(card.created_by) === String(currentUser.user_id);
+}
+
+// Карточка принадлежит другому проекту (пришла в сводку подпроектов).
+// Такую нельзя перетаскивать между досками, но открывать, комментировать
+// и — если ты автор или админ — редактировать можно точно так же,
+// как на доске самого подпроекта.
+function isForeignBoardCard(card) {
+  if (!card || !currentProject) return false;
+  // В общем виде своей доски нет вообще — там все карточки «чужие»
+  // в смысле перетаскивания, и это нормально.
+  if (isGlobalBoard()) return true;
+  return String(card.project_id) !== String(currentProject.id);
+}
+
+// Ограничение по разрешённым категориям снимается для автора задачи,
+// админа и ответственного за проект. Тот, кто просто назначен
+// исполнителем, кладёт задачу только в открытые категории.
+function canMoveInto(columnId, card) {
+  if (!currentUser) return false;
+  if (canManageCard(card)) return true;
+  if (currentProject?.can_manage) return true;
+  const col = columns.find(c => String(c.id) === String(columnId));
+  return !!(col && col.is_user_movable);
 }
  
 async function doLogin() {
@@ -249,7 +294,17 @@ async function doLogout() {
 }
  
 async function _uiLoggedIn(user) {
-  currentUser = { user_id: user.user_id, username: user.username };
+  currentUser = { user_id: user.user_id, username: user.username, role: user.role || 'USER' };
+
+  const roleInfo = ROLE_LABELS[currentUser.role] || ROLE_LABELS.USER;
+  ['current-role', 'current-role-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = roleInfo.text; el.className = `text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${roleInfo.cls}`; }
+  });
+  ['btn-admin-panel', 'btn-admin-panel-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isAdmin() ? '' : 'none';
+  });
 
   const authDesktop = document.getElementById('auth-area-desktop');
   if (authDesktop) authDesktop.classList.add('hidden');
@@ -265,7 +320,13 @@ async function _uiLoggedIn(user) {
   const unMobile = document.getElementById('current-username-m');
   if (unMobile) unMobile.textContent = currentUser.username;
 
-  document.getElementById('btn-add-col').disabled = false;
+  const addColBtn = document.getElementById('btn-add-col');
+  addColBtn.disabled = !isManager();
+  addColBtn.style.display = isManager() ? '' : 'none';
+  const projBtn = document.getElementById('btn-projects');
+  if (projBtn) projBtn.style.display = '';
+  const logPanel = document.getElementById('event-log-panel');
+  if (logPanel) logPanel.style.display = isAdmin() ? '' : 'none';
   connectWS();
   renderBoard();
 
@@ -289,6 +350,27 @@ function _uiLoggedOut() {
   if (uiMobile) { uiMobile.classList.add('hidden'); uiMobile.classList.remove('flex'); }
 
   document.getElementById('btn-add-col').disabled = true;
+  projects = []; currentProject = null; subSections = [];
+  sessionStorage.removeItem('last_project_id');
+  sessionStorage.removeItem('last_board_state');
+  const secHost = document.getElementById('subproject-sections');
+  if (secHost) secHost.innerHTML = '';
+  const projBtn = document.getElementById('btn-projects');
+  if (projBtn) projBtn.style.display = 'none';
+  const logPanel = document.getElementById('event-log-panel');
+  if (logPanel) logPanel.style.display = 'none';
+  globalUserFilter = '';
+  const fbar = document.getElementById('global-filter-bar');
+  if (fbar) fbar.style.display = 'none';
+  closeProjectDrawer();
+  ['btn-admin-panel', 'btn-admin-panel-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  ['current-role', 'current-role-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '';
+  });
 
   const pwDesktop = document.getElementById('auth-password');
   if (pwDesktop) pwDesktop.value = '';
@@ -337,6 +419,18 @@ function connectWS() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     if (msg.event === 'card_dragging') { _handleRemoteDrag(msg.payload); return; }
+    if (msg.event === 'card_unassigned') {
+      // Нас сняли с задачи — она больше не видна, убираем с доски.
+      const gone = msg.payload?.id;
+      cards = cards.filter(c => String(c.id) !== String(gone));
+      const openId = document.getElementById('card-edit-id')?.value;
+      if (openId && String(openId) === String(gone)) {
+        document.getElementById('modal-card').close();
+        toast.info('Вас сняли с этой задачи');
+      }
+      renderBoard();
+      return;
+    }
     if (msg.event === 'notification')  { showNotification(msg.payload); return; }
     if (msg.event === 'session_invalidated') {
       if (currentUser && msg.payload?.user_id === currentUser.user_id) {
@@ -379,6 +473,7 @@ function connectWS() {
       case 'user_online':       case 'user_offline':      case 'user_created':
       case 'comment_created':   case 'comment_updated':   case 'comment_deleted':
       case 'card_archived':     case 'card_restored':
+      case 'project_created':   case 'project_updated':   case 'project_deleted':
         schedulePartialReload(msg.event);
         break;
     }
@@ -407,7 +502,11 @@ async function _flushReload() {
 
   const needsComments = events.has('comment_created') || events.has('comment_updated') || events.has('comment_deleted');
  
-  const needsFull    = events.has('user_created');
+  // Изменения в дереве проектов затрагивают меню и сводку — только полная сборка
+  const needsFull    = events.has('user_created')
+                    || events.has('project_created')
+                    || events.has('project_updated')
+                    || events.has('project_deleted');
   const needsColumns = events.has('column_created') || events.has('column_updated') || events.has('column_deleted');
   const needsCards   = events.has('card_created')   || events.has('card_updated')   ||
                        events.has('card_deleted')   || events.has('card_moved')     ||
@@ -462,20 +561,59 @@ function _sendDragEvent(cardId, srcColId, curColId, curPos) {
 // DATA LOADING
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadBoard() {
-  const data = await api('GET', '/board/init');
+  let data;
+  if (isGlobalBoard()) {
+    data = await api('GET', '/board/all');
+    // Роль могли понизить, пока вкладка открыта — общий вид больше не наш
+    if (!data) { currentProject = null; data = await api('GET', '/board/init'); }
+  } else {
+    const qs = currentProject ? `?project_id=${encodeURIComponent(currentProject.id)}` : '';
+    data = await api('GET', `/board/init${qs}`);
+  }
+  if (!data) return;
+
+  projects = data.projects || [];
+  subSections = data.sections || [];
+  currentProject = data.project || null;
+  _renderProjectTree();
+  _renderProjectHeader();
+  if (currentProject) sessionStorage.setItem('last_project_id', String(currentProject.id));
+
+  // Роль может измениться, пока вкладка открыта (админ поменял),
+  // поэтому берём её из ответа сервера, а не только из логина.
+  if (data.me && currentUser) {
+    if (currentUser.role !== data.me.role) {
+      currentUser.role = data.me.role;
+      _applyRoleToUI();
+    }
+  }
+
   columns = data.columns || [];
   cards = data.cards || [];
   onlineUsers = data.online_users || [];
 
-  sessionStorage.setItem('last_board_state', JSON.stringify(data));
+  // Помечаем кеш владельцем: иначе при смене учётки в той же вкладке
+  // новый пользователь увидит доску предыдущего до окончания загрузки.
+  sessionStorage.setItem('last_board_state', JSON.stringify({
+    ...data,
+    _owner: currentUser?.user_id || null,
+  }));
 
   renderBoard();
 }
  
 async function _loadCards() {
   if (!currentUser) return;
-  
-  const crds = await api('GET', `/cards`);
+  // На корневом проекте есть ещё и сводка подпроектов —
+  // её умеет пересобрать только /board/init.
+  // Корневой проект показывает ещё и сводку подпроектов — её собирает
+  // только /board/init. Точечная догрузка /cards тут не годится.
+  // Общий вид и корневой проект содержат сводку по другим проектам —
+  // её собирает только полный запрос доски.
+  if (isGlobalBoard() || (currentProject && currentProject.is_root)) return loadBoard();
+
+  const pq = currentProject ? `?project_id=${encodeURIComponent(currentProject.id)}` : '';
+  const crds = await api('GET', `/cards${pq}`);
   if (!crds) return;
   cards = crds;
   renderBoard();
@@ -483,9 +621,16 @@ async function _loadCards() {
  
 async function _loadColumns() {
   if (!currentUser) return;
+  // Корневой проект показывает ещё и сводку подпроектов — её собирает
+  // только /board/init. Точечная догрузка /cards тут не годится.
+  // Общий вид и корневой проект содержат сводку по другим проектам —
+  // её собирает только полный запрос доски.
+  if (isGlobalBoard() || (currentProject && currentProject.is_root)) return loadBoard();
+
+  const pq = currentProject ? `?project_id=${encodeURIComponent(currentProject.id)}` : '';
   const [cols, crds] = await Promise.all([
-    api('GET', '/columns'),
-    api('GET', '/cards'),
+    api('GET', `/columns${pq}`),
+    api('GET', `/cards${pq}`),
   ]);
   if (!cols || !crds) return;
   columns = cols; cards = crds;
@@ -530,7 +675,8 @@ function renderBoard() {
 
   const btnAddCol = document.getElementById('btn-add-col');
   if (btnAddCol) {
-    btnAddCol.style.display = (currentUser && !isArchived) ? '' : 'none';
+    const allowed = currentUser && isManager() && !isArchived && !!currentProject?.can_manage;
+    btnAddCol.style.display = allowed ? '' : 'none';
   }
 
   const sorter = getCardSorted();
@@ -556,12 +702,18 @@ function renderBoard() {
   }
 
   updateColumnsVisibility();
+  _renderSubprojectSections();
+  _renderGlobalFilterBar();
 }
  
 function _renderColumn(col, colCards) {
   const ce = !!currentUser;
+  // Категориями и задачами проекта распоряжается тот, кто за него отвечает
+  const canManage = ce && isManager() && !!currentProject?.can_manage;
   const isArchived = currentFilterMode === 'archived';
   const count = colCards.length;
+  // Для исполнителя показываем, куда ему разрешено перетаскивать.
+  const showDropHint = ce && !canManage && !isArchived;
   return `
     <div class="column bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col
                 sm:min-w-[290px] sm:max-w-[290px] w-full"
@@ -574,11 +726,19 @@ function _renderColumn(col, colCards) {
           <span class="bg-slate-100 text-slate-500 text-[10px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0">${count}</span>
           ${isArchived ? `<span class="bg-amber-100 text-amber-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide">архив</span>` : ''}
         </div>
-        ${ce && !isArchived ? `<button onclick="deleteColumn('${col.id}')"
-          class="text-slate-400 hover:text-red-500 text-sm flex-shrink-0 ml-2" title="Удалить">✕</button>` : ''}
+        ${canManage && !isArchived ? `<div class="flex items-center gap-1 flex-shrink-0 ml-2">
+          <button onclick="event.stopPropagation(); toggleColumnUserAccess('${col.id}')"
+            data-lock-btn
+            class="text-sm ${col.is_user_movable ? 'text-emerald-500 hover:text-emerald-600' : 'text-slate-300 hover:text-slate-500'}"
+            title="${col.is_user_movable ? 'Исполнители могут переносить сюда задачи. Нажмите, чтобы запретить' : 'Исполнителям запрещено переносить сюда задачи. Нажмите, чтобы разрешить'}">
+            ${col.is_user_movable ? '↕' : '—'}
+          </button>
+          <button onclick="deleteColumn('${col.id}')"
+            class="text-slate-400 hover:text-red-500 text-sm" title="Удалить">✕</button>
+        </div>` : ''}
       </div>
-      <!-- Add card (скрыто в режиме архива) -->
-      ${ce && !isArchived ? `<div class="px-2 pb-2">
+      <!-- Add card (скрыто в режиме архива и для исполнителей) -->
+      ${canManage && !isArchived ? `<div class="px-2 pb-2">
         <button onclick="openAddCard('${col.id}')"
           class="w-full text-xs text-indigo-600 border border-dashed border-indigo-200
                  rounded-lg px-2 py-1.5 hover:bg-indigo-50 hover:border-indigo-400 transition-colors">
@@ -603,17 +763,29 @@ function updateColumnsVisibility() {
 
   allColEls.forEach(colEl => {
     const colId = colEl.getAttribute('data-column-id');
-    
     const hasCards = visibleCards.some(c => String(c.column_id) === String(colId));
 
-    if (currentFilterMode === 'all') {
-      colEl.classList.remove('hidden');
+    // При активном фильтре — скрываем пустые колонки (кроме 'all')
+    const hiddenByFilter = currentFilterMode !== 'all' && !hasCards;
+
+    // Кому колонка нужна:
+    //   админ и ответственный за проект — все колонки, включая пустые;
+    //   остальные — колонки со своими задачами ПЛЮС открытые для переноса,
+    //   иначе перетаскивать будет некуда: пустая колонка-приёмник
+    //   пропадала бы с доски и дропнуть карточку было невозможно.
+    const canManageThisProject = !!(currentProject && currentProject.can_manage);
+    const col = columns.find(c => String(c.id) === String(colId));
+    const isDropTarget = !!(col && col.is_user_movable);
+    const hiddenByRole = !isAdmin()
+      && !canManageThisProject
+      && !hasCards
+      && !isDropTarget
+      && currentFilterMode !== 'archived';
+
+    if (hiddenByFilter || hiddenByRole) {
+      colEl.classList.add('hidden');
     } else {
-      if (hasCards) {
-        colEl.classList.remove('hidden');
-      } else {
-        colEl.classList.add('hidden');
-      }
+      colEl.classList.remove('hidden');
     }
   });
 }
@@ -656,7 +828,11 @@ function _previewImage(attachments) {
  
 function _renderCard(c) {
   const creator  = c.created_by_username || '—';
-  const assignee = c.assigned_to_username || null;
+  const assignees = c.assignees || [];
+  // Карточка из сводки подпроекта: перетаскивать нельзя (другая доска),
+  // но кнопки редактирования подчиняются обычному праву по авторству.
+  const foreign = isForeignBoardCard(c);
+  const canManage = canManageCard(c);
   const hasAttachments = c.attachments && c.attachments.length > 0;
   const commentsCount = c.comments_count || 0;
 
@@ -680,6 +856,7 @@ function _renderCard(c) {
     <div class="card bg-white border border-slate-200 rounded-xl text-sm flex flex-col
                 overflow-hidden hover:shadow-md hover:-translate-y-px transition-all duration-150 group relative"
          data-card-id="${c.id}" data-col-id="${c.column_id}"
+         ${foreign ? 'data-foreign="1"' : ''}
          onclick="openEditCard('${c.id}')">
 
       <div class="absolute left-0 top-0 bottom-0 w-1 ${p.color}"></div>
@@ -696,7 +873,7 @@ function _renderCard(c) {
                   title="${esc(c.title)}">${esc(c.title)}</span>
           </div>
 
-          ${currentUser ? `
+          ${canManage ? `
           <div class="flex gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                onclick="event.stopPropagation()">
                ${c.is_archived ? `
@@ -738,7 +915,10 @@ function _renderCard(c) {
         <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100 mt-0.5">
           <div class="flex flex-col gap-0.5 min-w-0">
             <span class="text-[10px] text-slate-400 truncate">✍ ${esc(creator)}</span>
-            ${assignee ? `<span class="text-[10px] text-indigo-500 font-medium truncate">👤 ${esc(assignee)}</span>` : ''}
+            ${assignees.length ? `<span class="text-[10px] text-indigo-500 font-medium truncate"
+                title="${esc(assignees.map(a => a.username).join(', '))}">
+                👤 ${esc(assignees[0].username)}${assignees.length > 1 ? ` +${assignees.length - 1}` : ''}
+              </span>` : '<span class="text-[10px] text-slate-300 italic">без исполнителя</span>'}
           </div>
           
           <div class="flex items-center gap-1 flex-shrink-0">
@@ -769,7 +949,7 @@ function _renderCard(c) {
 }
 
 function downloadAllAttachmentsFor(cardId) {
-  const card = cards.find(c => c.id === cardId);
+  const card = findCardById(cardId);
   if (!card || !card.attachments || !card.attachments.length) {
     toast.info('Нет вложений для скачивания'); return;
   }
@@ -792,13 +972,15 @@ function _downloadAttachments(attachments, cardId = null) {
 
 async function archiveCardAction(e, cardId) {
   if (e) e.stopPropagation(); 
+  if (!canManageCard(findCardById(cardId)))
+    return toast.warn('Архивировать может только автор задачи или администратор');
   if (!confirm('Переместить карточку в архив?')) return;
 
   const res = await api('POST', `/cards/${cardId}/archive`);
   if (res) {
     toast.success('Карточка перемещена в архив');
     
-    const card = cards.find(c => c.id === cardId);
+    const card = findCardById(cardId);
     if (card) card.is_archived = true;
     renderBoard(); 
   }
@@ -806,12 +988,14 @@ async function archiveCardAction(e, cardId) {
 
 async function unarchiveCardAction(e, cardId) {
   if (e) e.stopPropagation();
+  if (!canManageCard(findCardById(cardId)))
+    return toast.warn('Восстанавливать может только автор задачи или администратор');
 
   const res = await api('POST', `/cards/${cardId}/unarchive`);
   if (res) {
     toast.success('Карточка восстановлена из архива');
     
-    const card = cards.find(c => c.id === cardId);
+    const card = findCardById(cardId);
     if (card) card.is_archived = false;
     renderBoard(); 
   }
@@ -902,16 +1086,20 @@ function _renderAttachmentsList(attachments) {
     dlLink.title = 'Скачать';
     dlLink.textContent = '⬇';
  
-    const delBtn = document.createElement('button');
-    delBtn.className = 'text-red-400 hover:text-red-600 flex-shrink-0';
-    delBtn.title = 'Удалить';
-    delBtn.textContent = '✕';
-    delBtn.onclick = () => deleteAttachment(a.id, a.isPending);
- 
     item.appendChild(iconSpan);
     item.appendChild(nameEl);
     item.appendChild(dlLink);
-    item.appendChild(delBtn);
+
+    // Удалять вложение может автор задачи или админ.
+    // Скачать — любой, кто видит карточку.
+    if (!cardModalReadOnly && !cardModalCommentOnly) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'text-red-400 hover:text-red-600 flex-shrink-0';
+      delBtn.title = 'Удалить';
+      delBtn.textContent = '✕';
+      delBtn.onclick = () => deleteAttachment(a.id, a.isPending);
+      item.appendChild(delBtn);
+    }
     list.appendChild(item);
   });
 }
@@ -957,7 +1145,7 @@ async function _processFiles(files) {
 
 function _refreshAttachmentsUI() {
   const cardId = document.getElementById('card-edit-id').value;
-  const card = cards.find(c => c.id === cardId);
+  const card = findCardById(cardId);
   
   const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
   
@@ -1029,7 +1217,7 @@ async function _uploadFileTo(cardId, file) {
   const result = await apiUpload(`/cards/${cardId}/attachments`, fd);
   if (result) {
     toast.success(`«${file.name}» прикреплён`);
-    const card = cards.find(c => c.id === cardId);
+    const card = findCardById(cardId);
     if (card) {
       if (!card.attachments) card.attachments = [];
       card.attachments.push(result);
@@ -1066,7 +1254,7 @@ async function deleteAttachment(attachmentId, isPending = false) {
   }
 
   const cardId = document.getElementById('card-edit-id').value;
-  const card = cards.find(c => c.id === cardId);
+  const card = findCardById(cardId);
   const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
   const pending = pendingFiles.map(f => ({ filename: f.name, isPending: true }));
   
@@ -1076,7 +1264,7 @@ async function deleteAttachment(attachmentId, isPending = false) {
 
 function downloadAllAttachments() {
   const cardId = document.getElementById('card-edit-id').value;
-  const card = cards.find(c => c.id === cardId);
+  const card = findCardById(cardId);
   if (!card) return;
   _downloadAttachments(card.attachments);
 }
@@ -1133,9 +1321,50 @@ async function changeFilterMode(mode) {
   }
 }
 
+// Кому карточка вообще положена к показу — независимо от выбранного фильтра.
+// Сервер отдаёт уже отфильтрованную выдачу, но клиент может держать
+// подгруженные ранее карточки (кеш доски, WS-события, переключение
+// проектов), поэтому правило дублируется здесь.
+// На сводном дашборде корневого проекта карточки подпроектов живут
+// не в `cards`, а в subSections. Любой поиск по id должен смотреть
+// в оба места, иначе действия над такой карточкой молча отваливаются:
+// canManageCard(undefined) === false и пользователь видит отказ в правах.
+function findCardById(cardId) {
+  const id = String(cardId);
+  const own = cards.find(c => String(c.id) === id);
+  if (own) return own;
+  for (const sec of subSections) {
+    const hit = (sec.cards || []).find(c => String(c.id) === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function isCardVisibleToMe(card) {
+  if (!currentUser || !card) return false;
+  if (isAdmin()) return true;
+
+  const meId = String(currentUser.user_id);
+  const isAssignee = (card.assignees || []).some(a => String(a.user_id) === meId);
+
+  // Исполнитель — только то, что назначено лично ему
+  if (currentUser.role !== 'TEAM_LEAD') return isAssignee;
+
+  // Постановщик — назначенное ему плюс созданное им самим
+  return isAssignee || String(card.created_by) === meId;
+}
+
 function getCardFilter() {
   const meId = currentUser?.user_id;
   return (card) => {
+    if (!isCardVisibleToMe(card)) return false;
+
+    // Выборка по конкретному исполнителю на вкладке «Все проекты»
+    if (globalUserFilter && isGlobalBoard()) {
+      const hit = (card.assignees || []).some(a => String(a.user_id) === String(globalUserFilter));
+      if (!hit) return false;
+    }
+
     if (currentFilterMode === 'archived') {
       return card.is_archived === true;
     }
@@ -1148,8 +1377,9 @@ function getCardFilter() {
       case 'all':
         return true;
       case 'my':
-        return card.assigned_to === meId;
+        return (card.assignees || []).some(a => String(a.user_id) === String(meId));
       case 'created':
+        // для постановщика это подмножество и так видимого
         return card.created_by === meId;
       case 'p-high':
         return card.priority === 'HIGHT';
@@ -1292,9 +1522,9 @@ async function showOfflineNotification() {
       const allCards = document.querySelectorAll('.card');
       allCards.forEach(cardEl => {
         const cardId = cardEl.dataset.cardId;
-        const cardData = cards.find(c => String(c.id) === String(cardId));
+        const cardData = findCardById(cardId);
         
-        if (cardData && cardData.assigned_to === currentUser.user_id) {
+        if (cardData && (cardData.assignees || []).some(a => String(a.user_id) === String(currentUser.user_id))) {
           cardEl.classList.add('ring-4', 'ring-emerald-400', 'shadow-emerald-200');
           
           setTimeout(() => {
@@ -1347,7 +1577,7 @@ function _initBoardSortable() {
     ghostClass: 'col-ghost',
     dragClass: 'col-drag',
     chosenClass: 'col-chosen',
-    disabled: !currentUser,
+    disabled: !currentUser || !isManager(),
     forceFallback: true,
     fallbackClass: 'col-drag',
     fallbackOnBody: true,
@@ -1373,7 +1603,7 @@ function _initBoardSortable() {
     async onEnd(evt) {
       isDragging = false;
       document.body.classList.remove('dragging-active');
-      if (!currentUser || evt.oldIndex === evt.newIndex) return;
+      if (!currentUser || !isManager() || evt.oldIndex === evt.newIndex) return;
  
       const colId  = evt.item.dataset.columnId;
       const newPos = evt.newIndex;
@@ -1399,7 +1629,23 @@ function _initCardSortable(columnId) {
  
   const touch = _isTouchDevice();
   const s = Sortable.create(listEl, {
-    group: 'cards',
+    // Исполнителю разрешено бросать карточку только в те категории,
+    // которые админ/тим-лидер пометил как доступные. Проверка здесь —
+    // чтобы карточка не «прыгала» и не откатывалась после отказа сервера.
+    group: {
+      name: 'cards',
+      pull: true,
+      put: function (to, from, dragged) {
+        const targetColId = to.el?.dataset?.colId;
+        if (!targetColId) return false;
+        // Доски проектов независимы: карточку из сводки подпроекта
+        // на доску родителя не переносим
+        if (dragged?.dataset?.foreign === '1') return false;
+        if (from === to) return true;
+        const card = cards.find(c => String(c.id) === String(dragged?.dataset?.cardId));
+        return canMoveInto(targetColId, card);
+      },
+    },
     animation: 150,
     ghostClass: 'card-ghost',
     dragClass: 'card-drag',
@@ -1450,9 +1696,18 @@ function _initCardSortable(columnId) {
       if (!cardId || !currentUser) return;
 
       const mid = cardId, tCol = e.to.dataset.colId, tPos = e.newIndex ?? 0;
+      const origCol = srcColId;
       cardId = srcColId = null;
-      const card = cards.find(c => c.id === mid);
 
+      const movedCard = findCardById(mid);
+      if (String(tCol) !== String(origCol) && !canMoveInto(tCol, movedCard)) {
+        const colName = columns.find(c => String(c.id) === String(tCol))?.name || 'эту категорию';
+        toast.warn(`Перенос в «${colName}» вам недоступен`);
+        await loadBoard();
+        return;
+      }
+
+      const card = movedCard;
       if (card) { card.column_id = tCol; card.position = tPos; }
       const result = await api('POST', `/cards/${mid}/move`, {
         target_column_id: tCol, target_position: tPos,
@@ -1467,6 +1722,11 @@ function _initCardSortable(columnId) {
 // COLUMN ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 function openAddColumn() {
+  if (!isManager()) return toast.warn('Создавать категории может админ или постановщик');
+  if (!currentProject) return toast.warn('Сначала выберите проект');
+  if (!currentProject.can_manage) return toast.warn('Вы не отвечаете за этот проект');
+  const chk = document.getElementById('new-col-user-movable');
+  if (chk) chk.checked = false;
   document.getElementById('new-col-name').value = '';
   document.getElementById('modal-add-column').showModal();
   setTimeout(() => document.getElementById('new-col-name').focus(), 50);
@@ -1476,72 +1736,301 @@ async function submitAddColumn() {
   const name = document.getElementById('new-col-name').value.trim();
   if (!name) return toast.warn('Название колонки обязательно');
   if (!_colNameRe.test(name)) return toast.warn('Название: только буквы, цифры и пробелы');
-  const result = await api('POST', '/columns', { name });
+  const isUserMovable = !!document.getElementById('new-col-user-movable')?.checked;
+  const result = await api('POST', '/columns', {
+    name,
+    project_id: currentProject?.id,
+    is_user_movable: isUserMovable,
+  });
   if (!result) return;
   document.getElementById('modal-add-column').close();
 }
+
+// Переключает разрешение для исполнителей переносить задачи в категорию.
+async function toggleColumnUserAccess(colId) {
+  const col = columns.find(c => String(c.id) === String(colId));
+  if (!col) return;
+  const next = !col.is_user_movable;
+
+  // Оптимистичное обновление: иконка меняется мгновенно, не ожидая WS
+  col.is_user_movable = next;
+  _updateLockIcon(colId, next);
+
+  const result = await api('PUT', `/columns/${colId}`, { is_user_movable: next });
+  if (!result) {
+    // Откатываем если сервер отклонил
+    col.is_user_movable = !next;
+    _updateLockIcon(colId, !next);
+    return;
+  }
+  toast.success(next
+    ? `Исполнители могут переносить задачи в «${col.name}»`
+    : `Перенос в «${col.name}» теперь только для администратора и постановщика`);
+}
+
+function _updateLockIcon(colId, isMovable) {
+  const colEl = document.querySelector(`[data-column-id="${colId}"]`);
+  if (!colEl) return;
+  const btn = colEl.querySelector('[data-lock-btn]');
+  if (!btn) return;
+  btn.textContent = isMovable ? '↕' : '—';
+  btn.title = isMovable
+    ? 'Исполнители могут переносить сюда задачи. Нажмите, чтобы запретить'
+    : 'Исполнителям запрещено переносить сюда задачи. Нажмите, чтобы разрешить';
+  btn.className = `text-sm ${isMovable ? 'text-emerald-500 hover:text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`;
+}
  
 async function deleteColumn(id) {
-  if (!confirm('Удалить колонку? (Она должна быть пустой)')) return;
+  if (!isManager()) return toast.warn('Недостаточно прав');
+  if (!confirm('Удалить категорию? (Она должна быть пустой)')) return;
   await api('DELETE', `/columns/${id}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ASSIGNEE SEARCH
+// ASSIGNEE PICKER — свой выпадающий список вместо системного <select>:
+// системный нельзя стилизовать и в нём не показать роль и аватар.
 // ─────────────────────────────────────────────────────────────────────────────
-function _initAssigneeSearch() {
-  const input = document.getElementById('card-assign-search');
-  const datalist = document.getElementById('assign-suggestions');
-  const hiddenId = document.getElementById('card-assign-id');
+let _allUsers = [];  // кеш активных пользователей на время сессии
 
-  if (!input) return;
+const ROLE_CHIP = {
+  ADMIN:     'bg-rose-50 text-rose-600',
+  TEAM_LEAD: 'bg-violet-50 text-violet-600',
+  USER:      'bg-slate-100 text-slate-500',
+};
 
-  input.addEventListener('input', (e) => {
-    const query = e.target.value.trim();
-    clearTimeout(searchTimeout);
-
-    if (query.length < 1) {
-      datalist.innerHTML = '';
-      hiddenId.value = '';
-      return;
-    }
-
-    searchTimeout = setTimeout(async () => {
-      const users = await api('GET', `/users/search?q=${encodeURIComponent(query)}`, undefined, true);
-      if (users) {
-        datalist.innerHTML = users
-          .map(u => `<option value="${esc(u.username)}" data-id="${u.user_id}">`)
-          .join('');
-
-        const match = users.find(u => u.username === query);
-        hiddenId.value = match ? match.user_id : '';
-      }
-    }, 300);
-  });
-
-  input.addEventListener('change', (e) => {
-    const val = e.target.value;
-    const opts = datalist.childNodes;
-    for (let i = 0; i < opts.length; i++) {
-      if (opts[i].value === val) {
-        hiddenId.value = opts[i].getAttribute('data-id');
-        break;
-      }
-    }
-  });
+// Стабильный цвет аватара по имени, чтобы люди различались взглядом
+const _AVATAR_COLORS = [
+  'bg-indigo-100 text-indigo-700', 'bg-emerald-100 text-emerald-700',
+  'bg-amber-100 text-amber-700',   'bg-sky-100 text-sky-700',
+  'bg-rose-100 text-rose-700',     'bg-violet-100 text-violet-700',
+];
+function _avatarColor(name) {
+  let h = 0;
+  for (let i = 0; i < String(name).length; i++) h = (h * 31 + String(name).charCodeAt(i)) >>> 0;
+  return _AVATAR_COLORS[h % _AVATAR_COLORS.length];
 }
- 
+function _initials(name) {
+  return String(name || '?').trim().slice(0, 2).toUpperCase();
+}
+
+async function _fillAssigneeSelect() {
+  if (!_allUsers.length) {
+    const users = await api('GET', '/users', undefined, true);
+    _allUsers = (users || []).filter(u => u.is_active);
+  }
+  _renderAssigneeOptions();
+}
+
+function _refreshAssigneeSelect() {
+  _renderAssigneeOptions();
+}
+
+function toggleAssigneePicker(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('assignee-picker-menu');
+  if (!menu) return;
+  const open = menu.style.display !== 'none';
+  open ? closeAssigneePicker() : openAssigneePicker();
+}
+
+function openAssigneePicker() {
+  const menu = document.getElementById('assignee-picker-menu');
+  if (!menu) return;
+  menu.style.display = '';
+  _renderAssigneeOptions();
+  const search = document.getElementById('assignee-search');
+  if (search) { search.value = ''; setTimeout(() => search.focus(), 30); }
+}
+
+function closeAssigneePicker() {
+  const menu = document.getElementById('assignee-picker-menu');
+  if (menu) menu.style.display = 'none';
+}
+
+function _renderAssigneeOptions() {
+  const box = document.getElementById('assignee-options');
+  if (!box) return;
+
+  const q = (document.getElementById('assignee-search')?.value || '').trim().toLowerCase();
+  const already = new Set(selectedAssignees.map(a => String(a.user_id)));
+
+  const list = _allUsers
+    .filter(u => !already.has(String(u.user_id)))
+    .filter(u => !q || u.username.toLowerCase().includes(q));
+
+  if (!list.length) {
+    box.innerHTML = `<p class="text-xs text-slate-400 text-center py-3">
+      ${q ? 'Никого не найдено' : 'Все уже назначены'}</p>`;
+    return;
+  }
+
+  box.innerHTML = list.map(u => {
+    const role = ROLE_LABELS[u.role] || ROLE_LABELS.USER;
+    const chip = ROLE_CHIP[u.role] || ROLE_CHIP.USER;
+    return `
+      <button type="button" onclick="pickAssignee('${u.user_id}')"
+        class="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-indigo-50 transition-colors text-left">
+        <span class="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold
+                     flex-shrink-0 ${_avatarColor(u.username)}">${esc(_initials(u.username))}</span>
+        <span class="flex-1 min-w-0">
+          <span class="block text-sm text-slate-700 truncate">${esc(u.username)}</span>
+        </span>
+        ${u.online ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title="В сети"></span>' : ''}
+        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0 ${chip}">${role.text}</span>
+      </button>`;
+  }).join('');
+}
+
+function pickAssignee(userId) {
+  const user = _allUsers.find(u => String(u.user_id) === String(userId));
+  if (user) addAssignee(user.user_id, user.username);
+  const search = document.getElementById('assignee-search');
+  if (search) search.value = '';
+  _renderAssigneeOptions();
+}
+
+function addAssignee(userId, username) {
+  if (cardModalReadOnly || cardModalCommentOnly) return;
+  if (selectedAssignees.some(a => String(a.user_id) === String(userId))) return;
+  selectedAssignees.push({ user_id: userId, username });
+  _renderAssigneeChips();
+  _refreshAssigneeSelect();
+}
+
+function removeAssignee(userId) {
+  if (cardModalReadOnly || cardModalCommentOnly) return;
+  selectedAssignees = selectedAssignees.filter(a => String(a.user_id) !== String(userId));
+  _renderAssigneeChips();
+  _refreshAssigneeSelect();
+}
+
+function _renderAssigneeChips() {
+  const box = document.getElementById('assignee-chips');
+  if (!box) return;
+
+  const locked = cardModalReadOnly || cardModalCommentOnly;
+
+  if (!selectedAssignees.length) {
+    box.innerHTML = locked
+      ? '<span class="text-xs text-slate-400 italic">Исполнители не назначены</span>'
+      : '';
+    return;
+  }
+
+  box.innerHTML = selectedAssignees.map(a => `
+    <span class="inline-flex items-center gap-1.5 bg-white border border-slate-200 shadow-sm
+                 rounded-full pl-1 ${locked ? 'pr-2.5' : 'pr-1'} py-1 text-xs">
+      <span class="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold
+                   ${_avatarColor(a.username)}">${esc(_initials(a.username))}</span>
+      <span class="text-slate-700 font-medium">${esc(a.username)}</span>
+      ${locked ? '' : `<button type="button" onclick="removeAssignee('${a.user_id}')"
+        class="w-4 h-4 rounded-full flex items-center justify-center text-slate-400
+               hover:bg-red-50 hover:text-red-500 transition-colors" title="Убрать">&times;</button>`}
+    </span>`).join('');
+}
+
+// Три режима модалки карточки:
+//   ro=false, commentOnly=false — полное редактирование (автор задачи или админ)
+//   ro=false, commentOnly=true  — только комментарии (назначен исполнителем)
+//   ro=true                     — только просмотр (архив)
+function _applyCardModalMode(opts = {}) {
+  const ro = cardModalReadOnly;
+  const commentOnly = !ro && cardModalCommentOnly;
+
+  // Поля задачи меняет только автор или админ
+  ['card-title-input', 'card-desc-input', 'card-deadline-input']
+    .forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = ro || commentOnly;
+    });
+
+  document.querySelectorAll('input[name="card-priority"]').forEach(r => {
+    r.disabled = ro || commentOnly;
+  });
+  document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
+    b.style.display = (ro || commentOnly) ? 'none' : '';
+  });
+
+  // Состав исполнителей меняет только автор или админ
+  const picker = document.getElementById('assignee-picker');
+  if (picker) picker.style.display = (ro || commentOnly) ? 'none' : '';
+  const assignHint = document.querySelector('#assignees-block p');
+  if (assignHint) assignHint.style.display = (ro || commentOnly) ? 'none' : '';
+  closeAssigneePicker();
+
+  // Загрузка вложений — автору и админу. Уже прикреплённые файлы
+  // остаются видимыми и скачиваемыми в любом режиме кроме архива.
+  const dropZone = document.getElementById('drop-zone');
+  if (dropZone) dropZone.style.display = (ro || commentOnly || opts.hideAttachments) ? 'none' : '';
+
+  // Комментарии доступны всем, кто видит карточку. Закрыты только в архиве.
+  const commentInput = document.querySelector('#comments-section .relative.group');
+  if (commentInput) commentInput.style.display = (ro || opts.hideComments) ? 'none' : '';
+
+  // «Сохранить» нечего, если менять можно только комментарии:
+  // они отправляются отдельной кнопкой сразу.
+  const saveBtn = document.querySelector('#modal-card button[onclick="submitCard()"]');
+  if (saveBtn) saveBtn.style.display = (ro || commentOnly) ? 'none' : '';
+
+  _renderAssigneeChips();
+}
+
+// Перерисовывает элементы интерфейса, зависящие от роли.
+// Нужна, когда админ поменял роль, пока вкладка открыта.
+function _applyRoleToUI() {
+  const roleInfo = ROLE_LABELS[currentUser?.role] || ROLE_LABELS.USER;
+  ['current-role', 'current-role-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = currentUser ? roleInfo.text : '';
+      el.className = `text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${roleInfo.cls}`;
+    }
+  });
+  ['btn-admin-panel', 'btn-admin-panel-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isAdmin() ? '' : 'none';
+  });
+  const projBtn = document.getElementById('btn-projects');
+  if (projBtn) projBtn.style.display = currentUser ? '' : 'none';
+
+  // Технический лог событий нужен только администратору
+  const logPanel = document.getElementById('event-log-panel');
+  if (logPanel) logPanel.style.display = isAdmin() ? '' : 'none';
+
+  // Общий дашборд остаётся только у админа
+  if (isGlobalBoard() && !isAdmin()) {
+    currentProject = null;
+    sessionStorage.removeItem('last_project_id');
+    loadBoard();
+  }
+
+  const addColBtn = document.getElementById('btn-add-col');
+  if (addColBtn) {
+    const allowed = currentUser && isManager() && !!currentProject?.can_manage;
+    addColBtn.disabled = !allowed;
+    addColBtn.style.display = allowed ? '' : 'none';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CARD ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
-function openAddCard(colId) {
-  document.getElementById('modal-card-title').textContent = 'New Card';
+async function openAddCard(colId) {
+  if (!isManager()) return toast.warn('Создавать задачи может админ или постановщик');
+  if (!currentProject?.can_manage) return toast.warn('Вы не отвечаете за этот проект');
+
+  cardModalReadOnly = false;
+  cardModalCommentOnly = false;
+  selectedAssignees = [];
+  _applyCardModalMode();
+  await _fillAssigneeSelect();
+  _renderAssigneeChips();
+
+  document.getElementById('modal-card-title').textContent = 'Новая задача';
   document.getElementById('card-edit-id').value = '';
   document.getElementById('card-col-id').value = colId;
   document.getElementById('card-title-input').value = '';
   document.getElementById('card-desc-input').value = '';
-  document.getElementById('card-assign-search').value = '';
-  document.getElementById('card-assign-id').value = '';
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
 
@@ -1556,42 +2045,40 @@ function openAddCard(colId) {
 }
  
 async function openEditCard(cardId) {
-  const card = cards.find(c => c.id === cardId);
+  const card = findCardById(cardId);
   if (!card) return;
 
   const isArchived = card.is_archived || currentFilterMode === 'archived';
 
-  document.getElementById('modal-card-title').textContent = isArchived ? '📦 Просмотр (архив)' : 'Edit Card';
+  // Режим карточки определяется ТОЛЬКО авторством, а не тем, на какой
+  // доске она открыта. На сводке корневого проекта карточка ведёт себя
+  // ровно так же, как на доске своего подпроекта.
+  //   Архив                      → полный просмотр, ничего нельзя
+  //   Автор задачи или админ     → полное редактирование
+  //   Просто назначен исполнителем → только комментарии
+  const isFullReadOnly   = isArchived;
+  const isCommentOnly    = !isFullReadOnly && !canManageCard(card);
+
+  cardModalReadOnly    = isFullReadOnly;
+  cardModalCommentOnly = isCommentOnly;
+
+  selectedAssignees = (card.assignees || []).map(a => ({ user_id: a.user_id, username: a.username }));
+  await _fillAssigneeSelect();
+  _renderAssigneeChips();
+
+  document.getElementById('modal-card-title').textContent =
+    isArchived ? '📦 Просмотр (архив)'
+    : (isCommentOnly   ? '💬 Задача (можно комментировать)'
+    :                    'Редактирование задачи');
+
   document.getElementById('card-edit-id').value = cardId;
   document.getElementById('card-col-id').value = card.column_id;
   document.getElementById('card-title-input').value = card.title;
   document.getElementById('card-desc-input').value = card.description || '';
-  document.getElementById('card-assign-search').value = card.assigned_to_username || '';
-  document.getElementById('card-assign-id').value = card.assigned_to || '';
-
-  // Режим только-чтение для архива
-  const editableFields = [
-    'card-title-input', 'card-desc-input', 'card-assign-search',
-    'card-deadline-input'
-  ];
-  editableFields.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.disabled = isArchived;
-  });
-  document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = isArchived; });
-  document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
-    b.style.display = isArchived ? 'none' : '';
-  });
-  const dropZone = document.getElementById('drop-zone');
-  if (dropZone) dropZone.style.display = isArchived ? 'none' : '';
-  const commentInput = document.querySelector('#comments-section .relative.group');
-  if (commentInput) commentInput.style.display = isArchived ? 'none' : '';
+  _applyCardModalMode({ hideAttachments: isArchived, hideComments: isArchived });
 
   const commentField = document.getElementById('card-new-comment');
   if (commentField) commentField.value = '';
-
-  const saveBtn = document.querySelector('#modal-card button[onclick="submitCard()"]');
-  if (saveBtn) saveBtn.style.display = isArchived ? 'none' : '';
 
   const priority = card.priority || "LOW";
   const radioToSelect = document.querySelector(`input[name="card-priority"][value="${priority}"]`);
@@ -1661,6 +2148,24 @@ async function submitCard() {
     toast.warn('В режиме архива редактирование недоступно');
     return;
   }
+  const _editId = document.getElementById('card-edit-id').value;
+  
+  if (_editId) {
+    const _card = findCardById(_editId);
+    // В режиме «только комментарии» кнопки «Сохранить» нет —
+    // сюда можно попасть только в обход интерфейса.
+    if (cardModalCommentOnly) {
+      toast.warn('Изменять задачу может только её автор или администратор');
+      return;
+    }
+    if (!canManageCard(_card)) {
+      toast.warn('Изменять задачу может только её автор или администратор');
+      return;
+    }
+  } else if (!isManager()) {
+    toast.warn('Создавать задачи может админ или постановщик');
+    return;
+  }
 
   const now = Date.now();
     
@@ -1687,7 +2192,7 @@ async function submitCard() {
     const colId      = document.getElementById('card-col-id').value;
     const title      = document.getElementById('card-title-input').value.trim();
     const desc       = document.getElementById('card-desc-input').value.trim();
-    const assigneeId = document.getElementById('card-assign-id').value.trim() || null;
+    const assigneeIds = selectedAssignees.map(a => a.user_id);
 
     if (!title) return toast.warn('Заголовок обязателен');
     if (!_colNameRe.test(title)) return toast.warn('Название: только буквы, цифры и пробелы');
@@ -1706,7 +2211,13 @@ async function submitCard() {
     const priorityElement = document.querySelector('input[name="card-priority"]:checked');
     const priority = priorityElement ? priorityElement.value : 'LOW';
 
-    const payload = { title, description: desc || null, assigned_to: assigneeId, deadline, priority };
+    const payload = {
+      title,
+      description: desc || null,
+      assignee_ids: assigneeIds,
+      deadline,
+      priority,
+    };
 
   let result;
     if (editId) {
@@ -1717,9 +2228,8 @@ async function submitCard() {
       }
       result = await api('PUT', `/cards/${editId}`, payload);
     } else {
-      result = await api('POST', '/cards', {
-        ...payload, column_id: colId, created_by: currentUser.user_id,
-      });
+      // created_by больше не передаём — сервер берёт автора из сессии
+      result = await api('POST', '/cards', { ...payload, column_id: colId });
     }
 
     if (result) {    
@@ -1756,6 +2266,8 @@ async function submitCard() {
 }
  
 async function deleteCard(id) {
+  if (!canManageCard(findCardById(id)))
+    return toast.warn('Удалить задачу может только её автор или администратор');
   if (!confirm('Удалить карточку?')) return;
   await api('DELETE', `/cards/${id}`);
 }
@@ -2132,8 +2644,6 @@ function insertEmoji(emoji) {
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  _initAssigneeSearch();
-
   document.getElementById('card-deadline-input')?.addEventListener('input', () => {
     _updateDeadlineClearBtn();
     _validateDeadline();
@@ -2247,6 +2757,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  const savedProject = sessionStorage.getItem('last_project_id');
+  if (savedProject) currentProject = { id: savedProject };
+
   const me = await api('GET', '/users/me', undefined, true);
 
   try {
@@ -2258,14 +2771,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (cachedData) {
         try {
           const data = JSON.parse(cachedData);
+          // Кеш чужого пользователя не показываем ни на мгновение
+          if (data._owner && String(data._owner) !== String(me.user_id)) {
+            throw new Error('cache belongs to another user');
+          }
           columns = data.columns || [];
           cards = data.cards || [];
           onlineUsers = data.online_users || [];
+          projects = data.projects || [];
+          subSections = data.sections || [];
+          if (data.project) currentProject = data.project;
+          _renderProjectTree();
+          _renderProjectHeader();
           
           renderBoard();
           if (typeof _renderOnlineUsers === 'function') _renderOnlineUsers();
         } catch (e) {
-          console.warn("Кеш пуст или поврежден");
+          sessionStorage.removeItem('last_board_state');
+          columns = []; cards = []; subSections = [];
         }
       }
 
@@ -2279,7 +2802,611 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ПРОЕКТЫ: боковое меню, переключение, сводка подпроектов
+// ─────────────────────────────────────────────────────────────────────────────
+function toggleProjectDrawer() {
+  const d = document.getElementById('project-drawer');
+  const open = !d.classList.contains('-translate-x-full');
+  open ? closeProjectDrawer() : openProjectDrawer();
+}
+
+function openProjectDrawer() {
+  document.getElementById('project-drawer').classList.remove('-translate-x-full');
+  document.getElementById('project-overlay').classList.remove('hidden');
+}
+
+function closeProjectDrawer() {
+  document.getElementById('project-drawer').classList.add('-translate-x-full');
+  document.getElementById('project-overlay').classList.add('hidden');
+}
+
+function _renderProjectTree() {
+  const box = document.getElementById('project-tree');
+  if (!box) return;
+
+  const adminBox = document.getElementById('project-admin-actions');
+  if (adminBox) adminBox.style.display = isAdmin() ? '' : 'none';
+
+  const btn = document.getElementById('btn-projects');
+  if (btn) btn.style.display = currentUser ? '' : 'none';
+
+  // Общий дашборд по всем проектам — только администратору
+  const globalItem = isAdmin() ? _globalBoardNode() : '';
+
+  if (!projects.length) {
+    box.innerHTML = globalItem + (isAdmin()
+      ? '<p class="text-center text-slate-400 text-xs py-6">Проектов пока нет.<br>Создайте первый.</p>'
+      : '<p class="text-center text-slate-400 text-xs py-6">Вам пока не назначен ни один проект</p>');
+    return;
+  }
+
+  box.innerHTML = globalItem + projects.map(root => _projectNode(root, 0)).join('');
+}
+
+async function setGlobalUserFilter(userId) {
+  globalUserFilter = userId || '';
+  closeUserFilterPicker();
+  renderBoard();
+}
+
+function toggleUserFilterPicker(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('user-filter-menu');
+  if (!menu) return;
+  menu.style.display !== 'none' ? closeUserFilterPicker() : openUserFilterPicker();
+}
+
+async function openUserFilterPicker() {
+  const menu = document.getElementById('user-filter-menu');
+  if (!menu) return;
+
+  if (!_allUsers.length) {
+    const users = await api('GET', '/users', undefined, true);
+    _allUsers = (users || []).filter(u => u.is_active);
+  }
+
+  menu.style.display = '';
+  const search = document.getElementById('user-filter-search');
+  if (search) { search.value = ''; setTimeout(() => search.focus(), 30); }
+  _renderUserFilterOptions();
+}
+
+function closeUserFilterPicker() {
+  const menu = document.getElementById('user-filter-menu');
+  if (menu) menu.style.display = 'none';
+}
+
+function _renderUserFilterOptions() {
+  const box = document.getElementById('user-filter-options');
+  if (!box) return;
+
+  const q = (document.getElementById('user-filter-search')?.value || '').trim().toLowerCase();
+  const list = _allUsers.filter(u => !q || u.username.toLowerCase().includes(q));
+
+  // Сколько задач у каждого — считаем по тем же секциям, что видит админ
+  const countFor = (uid) => subSections.reduce((acc, sec) => acc + (sec.cards || [])
+    .filter(c => !c.is_archived && (c.assignees || []).some(a => String(a.user_id) === String(uid)))
+    .length, 0);
+
+  const resetRow = `
+    <button type="button" onclick="setGlobalUserFilter('')"
+      class="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-indigo-50 transition-colors text-left
+             ${!globalUserFilter ? 'bg-indigo-50' : ''}">
+      <span class="w-7 h-7 rounded-full border border-dashed border-slate-300 flex items-center
+                   justify-center text-[11px] text-slate-400 flex-shrink-0">@</span>
+      <span class="flex-1 text-sm text-slate-700">Все пользователи</span>
+      ${!globalUserFilter ? '<span class="text-indigo-500 text-xs flex-shrink-0">✓</span>' : ''}
+    </button>
+    <div class="border-b border-slate-100 my-1"></div>`;
+
+  if (!list.length) {
+    box.innerHTML = (q ? '' : resetRow) +
+      '<p class="text-xs text-slate-400 text-center py-3">Никого не найдено</p>';
+    return;
+  }
+
+  box.innerHTML = (q ? '' : resetRow) + list.map(u => {
+    const role = ROLE_LABELS[u.role] || ROLE_LABELS.USER;
+    const chip = ROLE_CHIP[u.role] || ROLE_CHIP.USER;
+    const active = String(globalUserFilter) === String(u.user_id);
+    const n = countFor(u.user_id);
+    return `
+      <button type="button" onclick="setGlobalUserFilter('${u.user_id}')"
+        class="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-indigo-50 transition-colors
+               text-left ${active ? 'bg-indigo-50' : ''}">
+        <span class="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold
+                     flex-shrink-0 ${_avatarColor(u.username)}">${esc(_initials(u.username))}</span>
+        <span class="flex-1 min-w-0">
+          <span class="block text-sm text-slate-700 truncate">${esc(u.username)}</span>
+        </span>
+        ${n ? `<span class="bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0">${n}</span>` : ''}
+        ${u.online ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title="В сети"></span>' : ''}
+        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0 ${chip}">${role.text}</span>
+        ${active ? '<span class="text-indigo-500 text-xs flex-shrink-0">✓</span>' : ''}
+      </button>`;
+  }).join('');
+}
+
+async function _renderGlobalFilterBar() {
+  const bar = document.getElementById('global-filter-bar');
+  if (!bar) return;
+
+  if (!isGlobalBoard() || !isAdmin()) {
+    bar.style.display = 'none';
+    globalUserFilter = '';
+    closeUserFilterPicker();
+    return;
+  }
+
+  bar.style.display = '';
+
+  if (!_allUsers.length) {
+    const users = await api('GET', '/users', undefined, true);
+    _allUsers = (users || []).filter(u => u.is_active);
+  }
+
+  // Кнопка показывает выбранного человека так же, как он выглядит в списке
+  const who = _allUsers.find(u => String(u.user_id) === String(globalUserFilter));
+  const label = document.getElementById('user-filter-label');
+  const avatar = document.getElementById('user-filter-avatar');
+
+  if (label) label.textContent = who ? who.username : 'Все пользователи';
+  if (avatar) {
+    if (who) {
+      avatar.textContent = _initials(who.username);
+      avatar.className = `w-5 h-5 rounded-full flex items-center justify-center
+                          text-[9px] font-bold flex-shrink-0 ${_avatarColor(who.username)}`;
+    } else {
+      avatar.textContent = '@';
+      avatar.className = 'w-5 h-5 rounded-full border border-dashed border-slate-300 flex items-center'
+                       + ' justify-center text-[10px] text-slate-400 flex-shrink-0';
+    }
+  }
+
+  const btn = document.getElementById('user-filter-btn');
+  if (btn) btn.classList.toggle('text-slate-700', !!who);
+
+  const reset = document.getElementById('global-filter-reset');
+  if (reset) reset.style.display = globalUserFilter ? '' : 'none';
+
+  const counter = document.getElementById('global-filter-count');
+  if (counter) {
+    if (!globalUserFilter) {
+      counter.textContent = '';
+    } else {
+      const f = getCardFilter();
+      const n = subSections.reduce((acc, sec) => acc + (sec.cards || []).filter(f).length, 0);
+      counter.textContent = `${n} ${_plural(n, 'задача', 'задачи', 'задач')}`;
+    }
+  }
+
+  if (document.getElementById('user-filter-menu')?.style.display !== 'none') {
+    _renderUserFilterOptions();
+  }
+}
+
+function _globalBoardNode() {
+  const active = isGlobalBoard();
+  return `
+    <div class="mb-1 pb-1 border-b border-slate-100">
+      <button onclick="switchProject('${GLOBAL_BOARD_ID}')"
+        class="w-full flex items-center gap-2 rounded-lg pl-2 pr-2 py-1.5 text-left
+               ${active ? 'bg-indigo-50 border border-indigo-200' : 'hover:bg-slate-50 border border-transparent'}">
+        <span class="text-xs flex-shrink-0">🗂</span>
+        <span class="truncate text-[13px] ${active ? 'font-semibold text-indigo-700' : 'text-slate-700'}">Все проекты</span>
+      </button>
+    </div>`;
+}
+
+function _projectNode(p, depth) {
+  const active = currentProject && String(currentProject.id) === String(p.id);
+  const pad = depth === 0 ? 'pl-2' : 'pl-7';
+  const kids = (p.children || []).map(c => _projectNode(c, depth + 1)).join('');
+
+  return `
+    <div>
+      <div class="group flex items-center gap-1 rounded-lg ${pad} pr-1 py-1.5
+                  ${active ? 'bg-indigo-50 border border-indigo-200' : 'hover:bg-slate-50 border border-transparent'}">
+        <button onclick="switchProject('${p.id}')"
+          class="flex-1 text-left min-w-0 flex items-center gap-2">
+          <span class="text-xs flex-shrink-0">${depth === 0 ? '📁' : '↳'}</span>
+          <span class="truncate text-[13px] ${active ? 'font-semibold text-indigo-700' : 'text-slate-700'}"
+                title="${esc(p.name)}">${esc(p.name)}</span>
+          ${p.open_tasks ? `<span class="ml-auto flex-shrink-0 bg-slate-100 text-slate-500 text-[10px]
+              font-medium px-1.5 py-0.5 rounded-full">${p.open_tasks}</span>` : ''}
+        </button>
+        ${isAdmin() ? `
+          <button onclick="event.stopPropagation(); openProjectModal('${p.id}', null)"
+            class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 px-1 text-xs"
+            title="Настройки проекта">⚙</button>
+          ${depth === 0 ? `<button onclick="event.stopPropagation(); openProjectModal(null, '${p.id}')"
+            class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-emerald-600 px-1 text-sm leading-none"
+            title="Добавить подпроект">+</button>` : ''}
+        ` : ''}
+      </div>
+      ${kids}
+    </div>`;
+}
+
+async function switchProject(projectId) {
+  if (currentProject && String(currentProject.id) === String(projectId)) {
+    closeProjectDrawer();
+    return;
+  }
+  currentProject = { id: projectId };
+  closeProjectDrawer();
+  await loadBoard();
+}
+
+function _renderProjectHeader() {
+  const title = document.getElementById('board-title');
+  const crumb = document.getElementById('board-breadcrumb');
+  if (!title) return;
+
+  if (!currentProject) {
+    title.textContent = 'Доска';
+    if (crumb) crumb.textContent = '';
+    return;
+  }
+
+  title.textContent = currentProject.name || 'Доска';
+
+  if (crumb) {
+    let text = '';
+    if (isGlobalBoard()) {
+      text = `${subSections.length} ${_plural(subSections.length, 'доска', 'доски', 'досок')} по всем проектам`;
+    } else if (currentProject.parent_id) {
+      const parent = projects.find(p => String(p.id) === String(currentProject.parent_id));
+      if (parent) text = `${parent.name} → подпроект`;
+    } else if (subSections.length) {
+      text = `включая ${subSections.length} ${_plural(subSections.length, 'подпроект', 'подпроекта', 'подпроектов')}`;
+    }
+    crumb.textContent = text;
+  }
+
+  // Колонки и задачи создаются только там, где есть право вести проект
+  const canManageProject = !!(currentProject && currentProject.can_manage);
+  const addColBtn = document.getElementById('btn-add-col');
+  if (addColBtn) {
+    const allowed = currentUser && isManager() && canManageProject;
+    addColBtn.disabled = !allowed;
+    addColBtn.style.display = allowed ? '' : 'none';
+  }
+}
+
+function _plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+// ── Сводка подпроектов на корневом проекте ───────────────────────────
+// Колонки у каждого узла свои, поэтому карточки подпроектов нельзя
+// разложить по колонкам родителя. Показываем их отдельными досками
+// только для чтения — перетаскивание между проектами запрещено.
+function _renderSubprojectSections() {
+  const host = document.getElementById('subproject-sections');
+  if (!host) return;
+
+  if (!subSections.length || currentFilterMode === 'archived') {
+    host.innerHTML = (isGlobalBoard() && currentFilterMode !== 'archived')
+      ? '<p class="text-sm text-slate-400 py-6 text-center">Проектов с досками пока нет</p>'
+      : '';
+    return;
+  }
+
+  const filter = getCardFilter();
+  const sorter = getCardSorted();
+
+  // При выборке по пользователю проекты без его задач только мешают
+  const shown = (globalUserFilter && isGlobalBoard())
+    ? subSections.filter(sec => (sec.cards || []).some(filter))
+    : subSections;
+
+  if (!shown.length) {
+    host.innerHTML = '<p class="text-sm text-slate-400 py-6 text-center">У этого пользователя нет задач</p>';
+    return;
+  }
+
+  host.innerHTML = shown.map(sec => {
+    const cols = [...(sec.columns || [])].sort((a, b) => a.position - b.position);
+    const total = (sec.cards || []).filter(filter).length;
+
+    const board = cols.map(col => {
+      const list = (sec.cards || [])
+        .filter(c => String(c.column_id) === String(col.id))
+        .filter(filter)
+        .sort(sorter);
+
+      return `
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col
+                    sm:min-w-[260px] sm:max-w-[260px] w-full">
+          <div class="flex justify-between items-center px-3 pt-2.5 pb-2 border-b border-slate-100">
+            <h4 class="font-medium text-slate-600 truncate text-xs">${esc(col.name)}</h4>
+            <span class="bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5 rounded-full">${list.length}</span>
+          </div>
+          <div class="px-2 py-2 flex flex-col gap-2 min-h-[40px]">
+            ${list.map(c => _renderCard(c)).join('') ||
+              '<p class="text-[11px] text-slate-300 text-center py-2">пусто</p>'}
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <section>
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs">${sec.project.parent_name ? '↳' : '📁'}</span>
+          <button onclick="switchProject('${sec.project.id}')"
+            class="text-sm font-semibold text-slate-700 hover:text-indigo-600 transition-colors">
+            ${sec.project.parent_name ? `<span class="text-slate-400 font-normal">${esc(sec.project.parent_name)} / </span>` : ''}${esc(sec.project.name)}
+          </button>
+          <span class="bg-slate-100 text-slate-500 text-[10px] px-1.5 py-0.5 rounded-full">${total}</span>
+          <span class="text-[10px] text-slate-400">открыть, чтобы работать с доской</span>
+        </div>
+        <div class="flex gap-3 overflow-x-auto pb-2 items-start">
+          ${board || '<p class="text-xs text-slate-400 py-2">В подпроекте ещё нет категорий</p>'}
+        </div>
+      </section>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ПРОЕКТЫ: создание и настройка (только ADMIN)
+// ─────────────────────────────────────────────────────────────────────────────
+function _findProject(id) {
+  for (const root of projects) {
+    if (String(root.id) === String(id)) return root;
+    for (const child of (root.children || [])) {
+      if (String(child.id) === String(id)) return child;
+    }
+  }
+  return null;
+}
+
+async function openProjectModal(projectId, parentId) {
+  if (!isAdmin()) return toast.warn('Проекты создаёт администратор');
+
+  const existing = projectId ? _findProject(projectId) : null;
+  selectedOwners = existing ? (existing.owners || []).map(o => ({ ...o })) : [];
+
+  document.getElementById('project-edit-id').value = projectId || '';
+  document.getElementById('project-parent-id').value = parentId || '';
+  document.getElementById('project-name').value = existing ? existing.name : '';
+  document.getElementById('project-description').value = existing ? (existing.description || '') : '';
+
+  document.getElementById('modal-project-title').textContent =
+    existing ? 'Настройки проекта' : (parentId ? 'Новый подпроект' : 'Новый проект');
+
+  const delBtn = document.getElementById('project-delete-btn');
+  if (delBtn) delBtn.style.display = existing ? '' : 'none';
+
+  // Ответственный назначается на проект целиком; у подпроекта он наследуется
+  const ownersBlock = document.getElementById('project-owners-block');
+  const isSub = !!(parentId || (existing && existing.parent_id));
+  if (ownersBlock) ownersBlock.style.display = isSub ? 'none' : '';
+
+  _renderOwnerChips();
+  await _fillOwnerOptions();
+
+  document.getElementById('modal-project').showModal();
+  setTimeout(() => document.getElementById('project-name').focus(), 50);
+}
+
+async function _fillOwnerOptions() {
+  const sel = document.getElementById('project-owner-select');
+  if (!sel) return;
+  const users = await api('GET', '/admin/users', undefined, true);
+  const eligible = (users || []).filter(u =>
+    u.is_active && (u.role === 'TEAM_LEAD' || u.role === 'ADMIN'));
+
+  sel.innerHTML = '<option value="">Добавить постановщика…</option>' +
+    eligible
+      .filter(u => !selectedOwners.some(o => String(o.user_id) === String(u.user_id)))
+      .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
+      .join('');
+}
+
+function addProjectOwner(value) {
+  if (!value) return;
+  const [id, username] = value.split('|');
+  if (selectedOwners.some(o => String(o.user_id) === String(id))) return;
+  selectedOwners.push({ user_id: id, username });
+  _renderOwnerChips();
+  _fillOwnerOptions();
+}
+
+function removeProjectOwner(userId) {
+  selectedOwners = selectedOwners.filter(o => String(o.user_id) !== String(userId));
+  _renderOwnerChips();
+  _fillOwnerOptions();
+}
+
+function _renderOwnerChips() {
+  const box = document.getElementById('project-owner-chips');
+  if (!box) return;
+  box.innerHTML = selectedOwners.map(o => `
+    <span class="inline-flex items-center gap-1 bg-violet-50 text-violet-700 border border-violet-200
+                 rounded-full pl-2.5 pr-1 py-0.5 text-xs font-medium">
+      ${esc(o.username)}
+      <button type="button" onclick="removeProjectOwner('${o.user_id}')"
+        class="text-violet-400 hover:text-red-500 leading-none text-sm px-0.5">&times;</button>
+    </span>`).join('');
+}
+
+async function submitProject() {
+  const id = document.getElementById('project-edit-id').value;
+  const parentId = document.getElementById('project-parent-id').value;
+  const name = document.getElementById('project-name').value.trim();
+  const description = document.getElementById('project-description').value.trim() || null;
+
+  if (!name) return toast.warn('Название проекта обязательно');
+
+  const ownerIds = selectedOwners.map(o => o.user_id);
+  let result;
+
+  if (id) {
+    const existing = _findProject(id);
+    const payload = { name, description };
+    if (!existing || !existing.parent_id) payload.owner_ids = ownerIds;
+    result = await api('PATCH', `/projects/${id}`, payload);
+  } else {
+    const payload = { name, description, owner_ids: parentId ? [] : ownerIds };
+    if (parentId) payload.parent_id = parentId;
+    result = await api('POST', '/projects', payload);
+  }
+
+  if (!result) return;
+  document.getElementById('modal-project').close();
+  toast.success(id ? 'Проект обновлён' : 'Проект создан');
+
+  if (!id) currentProject = { id: result.id };
+  await loadBoard();
+}
+
+async function deleteProject() {
+  const id = document.getElementById('project-edit-id').value;
+  if (!id) return;
+  const p = _findProject(id);
+  if (!confirm(`Удалить проект «${p ? p.name : ''}»? Подпроекты и их категории будут удалены вместе с ним.`)) return;
+
+  const res = await api('DELETE', `/projects/${id}`);
+  if (res === null) return;
+
+  document.getElementById('modal-project').close();
+  toast.success('Проект удалён');
+  if (currentProject && String(currentProject.id) === String(id)) currentProject = null;
+  await loadBoard();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN PANEL (только роль ADMIN)
+// ─────────────────────────────────────────────────────────────────────────────
+let adminUsers = [];
+
+async function openAdminPanel() {
+  if (!isAdmin()) return toast.warn('Доступно только администратору');
+
+  document.getElementById('admin-new-username').value = '';
+  document.getElementById('admin-new-password').value = '';
+  document.getElementById('admin-new-role').value = 'USER';
+  document.getElementById('modal-admin').showModal();
+  await loadAdminUsers();
+}
+
+async function loadAdminUsers() {
+  const box = document.getElementById('admin-users-list');
+  box.innerHTML = '<p class="text-center text-slate-400 text-xs py-4">Загрузка…</p>';
+
+  const users = await api('GET', '/admin/users');
+  if (!users) {
+    box.innerHTML = '<p class="text-center text-red-400 text-xs py-4">Не удалось загрузить список</p>';
+    return;
+  }
+  adminUsers = users;
+  _renderAdminUsers();
+}
+
+function _renderAdminUsers() {
+  const box = document.getElementById('admin-users-list');
+  if (!adminUsers.length) {
+    box.innerHTML = '<p class="text-center text-slate-400 text-xs py-4">Пользователей нет</p>';
+    return;
+  }
+
+  box.innerHTML = adminUsers.map(u => {
+    const role = ROLE_LABELS[u.role] || ROLE_LABELS.USER;
+    const isMe = String(u.user_id) === String(currentUser?.user_id);
+    const dimmed = u.is_active ? '' : 'opacity-50';
+
+    return `
+      <div class="flex flex-wrap items-center gap-2 border border-slate-200 rounded-xl px-3 py-2 ${dimmed}">
+        <span class="w-2 h-2 rounded-full flex-shrink-0 ${u.online ? 'bg-emerald-500' : 'bg-slate-300'}"
+              title="${u.online ? 'В сети' : 'Не в сети'}"></span>
+
+        <span class="font-medium text-sm text-slate-800 truncate flex-1 min-w-[100px]">
+          ${esc(u.username)}
+          ${isMe ? '<span class="text-[10px] text-slate-400 font-normal">(вы)</span>' : ''}
+          ${!u.is_active ? '<span class="text-[10px] text-red-500 font-normal">деактивирован</span>' : ''}
+        </span>
+
+        <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${role.cls}">${role.text}</span>
+
+        <select onchange="changeUserRole('${u.user_id}', this.value)" ${isMe ? 'disabled' : ''}
+          class="border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white disabled:opacity-40 disabled:cursor-not-allowed">
+          <option value="USER"      ${u.role === 'USER' ? 'selected' : ''}>Пользователь</option>
+          <option value="TEAM_LEAD" ${u.role === 'TEAM_LEAD' ? 'selected' : ''}>Тим лидер</option>
+          <option value="ADMIN"     ${u.role === 'ADMIN' ? 'selected' : ''}>Администратор</option>
+        </select>
+
+        <button onclick="resetUserPassword('${u.user_id}', '${esc(u.username)}')"
+          class="text-xs text-slate-500 hover:text-indigo-600 border border-slate-200 rounded-lg px-2 py-1"
+          title="Задать новый пароль">🔑</button>
+
+        ${u.is_active
+          ? `<button onclick="setUserActive('${u.user_id}', false)" ${isMe ? 'disabled' : ''}
+               class="text-xs text-slate-400 hover:text-red-500 border border-slate-200 rounded-lg px-2 py-1 disabled:opacity-30 disabled:cursor-not-allowed"
+               title="Деактивировать">✕</button>`
+          : `<button onclick="setUserActive('${u.user_id}', true)"
+               class="text-xs text-emerald-600 hover:text-emerald-700 border border-emerald-200 rounded-lg px-2 py-1"
+               title="Вернуть доступ">↺</button>`}
+      </div>`;
+  }).join('');
+}
+
+async function submitNewUser() {
+  const username = document.getElementById('admin-new-username').value.trim();
+  const password = document.getElementById('admin-new-password').value;
+  const role     = document.getElementById('admin-new-role').value;
+
+  if (!username) return toast.warn('Укажите логин');
+  if (password.length < 6) return toast.warn('Пароль: минимум 6 символов');
+
+  const created = await api('POST', '/admin/users', { username, password, role });
+  if (!created) return;
+
+  document.getElementById('admin-new-username').value = '';
+  document.getElementById('admin-new-password').value = '';
+  toast.success(`Пользователь ${created.username} создан`);
+  await loadAdminUsers();
+}
+
+async function changeUserRole(userId, role) {
+  const updated = await api('PATCH', `/admin/users/${userId}`, { role });
+  if (!updated) { await loadAdminUsers(); return; }
+  toast.success(`Роль изменена: ${(ROLE_LABELS[role] || {}).text || role}`);
+  // Смена роли обрывает сессии пользователя — он будет вынужден войти заново
+  await loadAdminUsers();
+}
+
+async function resetUserPassword(userId, username) {
+  const password = prompt(`Новый пароль для «${username}» (минимум 6 символов):`);
+  if (password === null) return;
+  if (password.length < 6) return toast.warn('Пароль: минимум 6 символов');
+
+  const updated = await api('PATCH', `/admin/users/${userId}`, { password });
+  if (!updated) return;
+  toast.success('Пароль обновлён, активные сессии сброшены');
+}
+
+async function setUserActive(userId, isActive) {
+  if (!isActive && !confirm('Деактивировать пользователя? Он не сможет войти, а его сессии будут сброшены.')) return;
+
+  const updated = await api('PATCH', `/admin/users/${userId}`, { is_active: isActive });
+  if (!updated) { await loadAdminUsers(); return; }
+  toast.success(isActive ? 'Доступ восстановлен' : 'Пользователь деактивирован');
+  await loadAdminUsers();
+}
+
 document.addEventListener('click', (e) => {
+  // Клик мимо выпадающего списка исполнителей закрывает его
+  const picker = document.getElementById('assignee-picker');
+  if (picker && !picker.contains(e.target)) closeAssigneePicker();
+
+  const ufPicker = document.getElementById('user-filter-picker');
+  if (ufPicker && !ufPicker.contains(e.target)) closeUserFilterPicker();
+
   if (e.target.tagName !== 'DIALOG') return;
   const r = e.target.getBoundingClientRect();
   const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
@@ -2290,7 +3417,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalCard = document.getElementById('modal-card');
   if (modalCard) {
     modalCard.addEventListener('close', () => {
-      const fields = ['card-title-input','card-desc-input','card-assign-search','card-deadline-input'];
+      cardModalReadOnly = false;
+      cardModalCommentOnly = false;
+      selectedAssignees = [];
+      const chips = document.getElementById('assignee-chips');
+      if (chips) chips.innerHTML = '';
+      const assignHint = document.querySelector('#assignees-block p');
+      if (assignHint) assignHint.style.display = '';
+      const fields = ['card-title-input','card-desc-input','card-deadline-input'];
       fields.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
       document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = false; });
       document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => { b.style.display = ''; });
