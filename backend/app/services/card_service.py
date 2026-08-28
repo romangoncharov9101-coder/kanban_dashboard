@@ -93,6 +93,40 @@ class CardService:
     def _assert_can_comment(self, card: Card, user: User) -> None:
         self._assert_can_view(card, user)
 
+    @staticmethod
+    def _can_edit_attachments(card: Card, user: User) -> bool:
+        """
+        Право менять именно вложения (добавлять/удалять/загружать файлы).
+        Из всей карточки это единственное поле, доступное не только
+        админу и автору: им может распоряжаться ещё и исполнитель —
+        но только если он действительно назначен на карточку.
+        Быть постановщиком, не будучи при этом исполнителем, для
+        вложений недостаточно — на остальные поля карточки это право
+        не распространяется (см. _can_manage).
+        """
+        if user.role is UserRole.ADMIN:
+            return True
+        return card.is_assignee(user.user_id)
+
+    def _assert_can_edit_attachments(self, card: Card, user: User) -> None:
+        self._assert_can_view(card, user)
+        if not self._can_edit_attachments(card, user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Управлять вложениями может только исполнитель, назначенный на карточку, или администратор.',
+            )
+
+    async def _card_ctx(self, card: Card) -> dict:
+        """Человекочитаемый контекст карточки для журнала действий."""
+        col = await self.column_repo.get_by_id(card.column_id)
+        project = await self.project_repo.get_by_id(card.project_id) if card.project_id else None
+        return {
+            'card_title': card.title,
+            'column_name': col.name if col else None,
+            'project_id': card.project_id,
+            'project_name': project.name if project else None,
+        }
+
     def _visible_subset(self, cards: list[Card], user: User) -> list[Card]:
         return [c for c in cards if self._can_view(c, user)]
 
@@ -190,11 +224,17 @@ class CardService:
 
         await self._notify_assignees(card, {u.user_id for u in assignees}, author)
 
+        project = await self.project_repo.get_by_id(col.project_id)
+        who = ', '.join(u.username for u in assignees) or 'без исполнителя'
         await self.event_repo.create(
             event_type=EventType.CARD_CREATED,
-            message=f"Карточка создана в категории '{col.name}'",
+            message=f"Создал задачу «{card.title}» в категории «{col.name}» ({who})",
             card_id=card.id,
-            user_id=author.user_id,
+            actor=author,
+            card_title=card.title,
+            column_name=col.name,
+            project_id=col.project_id,
+            project_name=project.name if project else None,
             payload=payload
         )
         await manager.publish('card_created', str(card.id), payload, audience=self._audience(card))
@@ -206,6 +246,19 @@ class CardService:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
+
+        sent_fields = data.model_fields_set
+
+        # Если пытаются изменить основные поля карточки (заголовок, описание, дедлайн, приоритет, колонка)
+        restricted_fields = {'title', 'description', 'deadline', 'priority', 'column_id'}
+        if sent_fields.intersection(restricted_fields):
+            self._assert_can_manage(card, actor) # Только Автор/Админ
+        else:
+            # Для остальных полей (например, исполнителей) достаточно быть хотя бы исполнителем/автором/админом
+            self._assert_can_view(card, actor)
+            if not (self._can_manage(card, actor) or card.is_assignee(actor.user_id)):
+                raise HTTPException(status_code=403, detail='Недостаточно прав для изменения задачи.')
+            
         self._assert_can_manage(card, actor)
 
         updates: dict = {}
@@ -215,23 +268,25 @@ class CardService:
         old_assignee_ids = {u.user_id for u in card.assignees}
         new_assignee_ids = old_assignee_ids
 
+        old_title = card.title
         if 'title' in sent_fields and data.title is not None and data.title != card.title:
             updates['title'] = data.title
-            log_details.append(f"изменил название на '{data.title}'")
+            log_details.append(f'название → «{data.title}»')
 
         if 'description' in sent_fields and data.description != card.description:
             updates['description'] = data.description
-            log_details.append("обновил описание")
+            log_details.append('обновлено описание')
 
         if 'deadline' in sent_fields and data.deadline != card.deadline:
             updates['deadline'] = data.deadline
-            date_str = data.deadline.strftime('%d.%m.%Y') if data.deadline else "удален"
-            log_details.append(f"установил дедлайн: {date_str}")
+            date_str = data.deadline.strftime('%d.%m.%Y') if data.deadline else 'снят'
+            log_details.append(f'дедлайн: {date_str}')
 
         if 'priority' in sent_fields and data.priority is not None and data.priority != card.priority:
             updates['priority'] = data.priority
-            p_name = data.priority.value if hasattr(data.priority, 'value') else str(data.priority)
-            log_details.append(f"сменил приоритет на {p_name.split('.')[-1]}")
+            p_raw = data.priority.value if hasattr(data.priority, 'value') else str(data.priority)
+            p_name = {'HIGHT': 'высокий', 'MEDIUM': 'средний', 'LOW': 'низкий'}.get(p_raw, p_raw)
+            log_details.append(f'приоритет → {p_name}')
 
         # Исполнители: полная замена списка
         assignees_changed = False
@@ -242,9 +297,9 @@ class CardService:
                 new_assignee_ids = {u.user_id for u in users}
                 assignees_changed = True
                 if users:
-                    log_details.append(f"назначил исполнителей: {', '.join(u.username for u in users)}")
+                    log_details.append(f"исполнители → {', '.join(u.username for u in users)}")
                 else:
-                    log_details.append("убрал всех исполнителей")
+                    log_details.append('исполнители сняты')
 
         event_type = EventType.CARD_EDITED
         original_column_id = card.column_id
@@ -264,7 +319,7 @@ class CardService:
             updates['position'] = max_pos + 1
 
             event_type = EventType.CARD_MOVED
-            log_details.append(f"переместил карточку в категорию '{target_col.name}'")
+            log_details.append(f'перенесена в категорию «{target_col.name}»')
 
         if not updates and not assignees_changed:
             return CardOut.model_validate(card)
@@ -288,17 +343,20 @@ class CardService:
         for uid in removed:
             await self.notif_repo.delete_specific_notification(uid, card.id)
 
-        final_message = "; ".join(log_details).capitalize() or "Обновил карточку"
+        final_message = '; '.join(log_details)
 
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
 
+        ctx = await self._card_ctx(card)
         await self.event_repo.create(
             event_type=event_type,
-            message=final_message,
+            message=(f'Изменил задачу «{old_title}»: {final_message}'
+                     if final_message else f'Изменил задачу «{old_title}»'),
             card_id=card.id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **ctx,
         )
 
         ws_event = "card_moved" if event_type == EventType.CARD_MOVED else "card_updated"
@@ -340,6 +398,9 @@ class CardService:
 
         column_id = card.column_id
         title = card.title
+        del_project_id = card.project_id
+        _del_project = await self.project_repo.get_by_id(card.project_id) if card.project_id else None
+        del_project_name = _del_project.name if _del_project else None
         await self.notif_repo.delete_by_card(card_id)
         await self.repo.delete(card)
         await self.repo.normalize_position_in_column(column_id)
@@ -347,9 +408,13 @@ class CardService:
         payload = {'id': str(card_id)}
         await self.event_repo.create(
             event_type=EventType.CARD_DELETED,
-            message=f"Удалил карточку '{title}'",
+            message=f"Удалил задачу «{title}»"
+                    + (f" из проекта «{del_project_name}»" if del_project_name else ''),
             card_id=None,
-            user_id=actor.user_id
+            actor=actor,
+            card_title=title,
+            project_id=del_project_id,
+            project_name=del_project_name,
         )
         await manager.publish('card_deleted', str(card_id), payload, audience=audience)
         await self.session.commit()
@@ -454,16 +519,24 @@ class CardService:
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
 
+        source_col = await self.column_repo.get_by_id(source_column_id)
+        src_name = source_col.name if source_col else '—'
         if same_column:
-            log_msg = f"Изменил приоритет отображения (позиция {card.position})"
+            log_msg = f"Изменил порядок задачи «{card.title}» в категории «{target_col.name}»"
         else:
-            log_msg = f"Переместил карточку в категорию '{target_col.name}' на позицию {card.position}"
+            log_msg = (f"Перенёс задачу «{card.title}» из категории «{src_name}» "
+                       f"в «{target_col.name}»")
 
+        project = await self.project_repo.get_by_id(card.project_id) if card.project_id else None
         await self.event_repo.create(
             event_type=EventType.CARD_MOVED,
             message=log_msg,
             card_id=card.id,
-            user_id=actor.user_id,
+            actor=actor,
+            card_title=card.title,
+            column_name=target_col.name,
+            project_id=card.project_id,
+            project_name=project.name if project else None,
             payload=payload
         )
 
@@ -486,10 +559,11 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.CARD_ARCHIVED,
-            message=f'Карточка "{card.title}" перемещена в архив.',
+            message=f'Отправил задачу «{card.title}» в архив',
             card_id=card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card)),
         )
 
         await manager.publish('card_archived', str(card.id), payload, audience=self._audience(card))
@@ -511,10 +585,11 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.CARD_RESTORED,
-            message=f"Карточка '{card.title}' восстановлена из архива",
+            message=f'Вернул задачу «{card.title}» из архива',
             card_id=card.id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card)),
         )
 
         await manager.publish('card_restored', str(card.id), payload, audience=self._audience(card))
@@ -566,7 +641,7 @@ class CardService:
         card = await self.repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail="Карточка не найдена.")
-        self._assert_can_comment(card, actor)
+        self._assert_can_edit_attachments(card, actor)
 
         count = await self.repo.get_attachment_count(card_id)
         if count >= 5:
@@ -597,11 +672,12 @@ class CardService:
         payload = out.model_dump(mode='json')
 
         await self.event_repo.create(
-            event_type=EventType.CARD_EDITED,
-            message=f"Прикреплен файл {file.filename}",
+            event_type=EventType.ATTACHMENT_ADDED,
+            message=f'Прикрепил файл «{file.filename}» к задаче «{updated_card.title}»',
             card_id=card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(updated_card)),
         )
 
         await manager.publish('card_updated', str(card_id), payload, audience=self._audience(updated_card))
@@ -618,7 +694,7 @@ class CardService:
         card_id = attachment.card_id
         card = await self.repo.get_by_id(card_id)
         if card:
-            self._assert_can_comment(card, actor)
+            self._assert_can_edit_attachments(card, actor)
 
         try:
             if attachment.file_path and os.path.exists(attachment.file_path):
@@ -638,11 +714,12 @@ class CardService:
         payload = out.model_dump(mode='json')
 
         await self.event_repo.create(
-            event_type=EventType.CARD_EDITED,
-            message=f"Удален файл: {filename}",
+            event_type=EventType.ATTACHMENT_DELETED,
+            message=f'Удалил файл «{filename}» из задачи «{updated_card.title}»',
             card_id=card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(updated_card)),
         )
 
         await manager.publish('card_updated', str(card_id), payload, audience=self._audience(updated_card))
@@ -664,10 +741,12 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.COMMENT_ADDED,
-            message=f"Добавил комментарий: {text[:50]}{'...' if len(text) > 50 else ''}",
+            message=f'Прокомментировал задачу «{card.title}»: '
+                    f"{text[:80]}{'…' if len(text) > 80 else ''}",
             card_id=card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card)),
         )
 
         await manager.publish('comment_created', str(card_id), payload, audience=self._audience(card))
@@ -691,10 +770,11 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.COMMENT_EDITED,
-            message="Отредактировал свой комментарий",
+            message=f'Изменил свой комментарий к задаче «{card.title if card else "—"}»',
             card_id=comment.card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card) if card else {}),
         )
         await manager.publish(
             'comment_updated', str(comment.card_id), payload,
@@ -725,10 +805,15 @@ class CardService:
 
         await self.event_repo.create(
             event_type=EventType.COMMENT_DELETED,
-            message="Удалил комментарий",
+            message=f'Удалил комментарий'
+                    + (f' к задаче «{card.title}»' if card else '')
+                    + ('' if str(comment.user_id) == str(actor.user_id)
+                       else f' (автор: {comment.author.username})'),
             card_id=card_id,
-            user_id=actor.user_id,
-            payload=payload
+            actor=actor,
+            payload=payload,
+            target_username=None if str(comment.user_id) == str(actor.user_id) else comment.author.username,
+            **(await self._card_ctx(card) if card else {}),
         )
 
         await manager.publish(

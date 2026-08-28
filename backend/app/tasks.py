@@ -9,15 +9,20 @@ logger = get_logger('tasks.cleanup')
 settings = get_settings()
 
 async def event_cleanup_task() -> None:
+    # Раньше журнал чистился раз в сутки (EVENT_MAX_AGE_SECONDS=86400)
+    # и история действий фактически не хранилась. Теперь срок задаётся
+    # в днях, а файловый архив в logs/audit переживает и эту чистку.
+    max_age = settings.EVENT_DB_RETENTION_DAYS * 24 * 3600
     logger.info(
-        f'Event cleanup task started (interval={settings.EVENT_CLEANUP_INTERVAL}, max_age={settings.EVENT_MAX_AGE_SECONDS})',
+        f'Event cleanup task started (interval={settings.EVENT_CLEANUP_INTERVAL}s, '
+        f'retention={settings.EVENT_DB_RETENTION_DAYS} days)',
     )
     while True:
         await asyncio.sleep(settings.EVENT_CLEANUP_INTERVAL)
         try:
             async with AsyncSessionLocale() as session:
                 repo = EventRepository(session)
-                deleted = await repo.delete_older_than(settings.EVENT_MAX_AGE_SECONDS)
+                deleted = await repo.delete_older_than(max_age)
                 await session.commit()
                 if deleted:
                     logger.info(f'Event cleanup: removed {deleted} old events')

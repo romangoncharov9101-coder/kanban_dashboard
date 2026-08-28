@@ -1,7 +1,9 @@
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.user_repo import UserRepository
+from app.repositories.event_repo import EventRepository
 from app.repositories.session_repo import SessionRepository
+from app.db.models import EventType
 from app.db.schemas import UserLoginRequest, UserLoginResponse, UserOut
 
 from app.core.sequrity import verify_password, sign_session_id, unsign_session_id
@@ -26,6 +28,7 @@ class UserService:
         self.session = session
         self.repo = UserRepository(session)
         self.session_repo = SessionRepository(session)
+        self.event_repo = EventRepository(session)
 
     async def login(self, data: UserLoginRequest) -> tuple[UserLoginResponse, str]:
         user = await self.repo.get_user_by_username(data.username)
@@ -57,6 +60,11 @@ class UserService:
         db_session = await self.session_repo.create(user.user_id)
         signed = sign_session_id(db_session.id)
 
+        await self.event_repo.create(
+            event_type=EventType.USER_LOGIN,
+            message=f'Вошёл в систему',
+            actor=user,
+        )
         logger.info("User logged in: %s (%s)", user.username, user.role.value)
 
         return (
@@ -72,6 +80,11 @@ class UserService:
         await self.repo.set_online(user, False)
         payload = {'user_id': str(user.user_id), 'username': user.username}
         await manager.publish('user_offline', str(user.user_id), payload)
+        await self.event_repo.create(
+            event_type=EventType.USER_LOGOUT,
+            message='Вышел из системы',
+            actor=user,
+        )
         logger.info("User logged out: %s", user.username)
 
     async def get_online_users(self) -> list[UserOut]:

@@ -1,0 +1,30 @@
+# ═══════════════════════════════════════════════════════════════════════
+#  Локальная разработка. Подхватывается автоматически при
+#  `docker compose up` и переопределяет боевые настройки.
+#
+#  НА СЕРВЕР ЭТОТ ФАЙЛ НЕ КОПИРУЕТСЯ. В проде запускай явно:
+#      docker compose -f docker-compose.yml up -d
+# ═══════════════════════════════════════════════════════════════════════
+
+services:
+  db:
+    # Порт БД на хосте — только для локального psql/DBeaver.
+    # В боевом файле его нет намеренно.
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+
+  backend:
+    environment:
+      LOG_LEVEL: DEBUG
+      EXPOSE_DOCS: "True"
+    # Прямой доступ к API мимо nginx — удобно дёргать эндпоинты руками
+    ports:
+      - "${BACKEND_HOST_PORT:-9001}:8000"
+    volumes:
+      # Живая перезагрузка кода при правках
+      - ./backend:/app
+      - uploads:/app/uploads
+      - audit_logs:/app/logs
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

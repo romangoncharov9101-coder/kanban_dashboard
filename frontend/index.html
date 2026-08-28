@@ -327,7 +327,7 @@
       class="bg-emerald-500 text-white px-3 py-1 rounded text-sm hover:bg-emerald-600
              disabled:opacity-40 disabled:cursor-not-allowed">+ Колонка</button>
   </div>
-  <div class="flex gap-1.5 items-center text-sm text-slate-500 ml-auto mb-3">
+  <div id="online-bar" class="flex gap-1.5 items-center text-sm text-slate-500 ml-auto mb-3">
     <span class="font-medium text-xs">Online:</span>
     <div id="online-users" class="flex gap-1.5 flex-wrap"></div>
   </div>
@@ -370,17 +370,75 @@
 
   <!-- Сводка по подпроектам: заполняется только на корневом проекте -->
   <div id="subproject-sections" class="flex flex-col gap-6"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════
+       ЖУРНАЛ ДЕЙСТВИЙ (только ADMIN)
+  ════════════════════════════════════════════════════════════════ -->
+  <section id="journal-view" style="display:none">
+    <div class="bg-white border border-slate-200 rounded-xl p-3 mb-4 flex flex-wrap items-end gap-3">
+      <div class="flex flex-col gap-1">
+        <label class="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Поиск</label>
+        <input id="journal-search" type="text" placeholder="Задача, проект, пользователь…"
+          class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm w-56
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Раздел</label>
+        <select id="journal-category"
+          class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">Все разделы</option>
+          <option value="card">Задачи</option>
+          <option value="column">Категории</option>
+          <option value="project">Проекты</option>
+          <option value="user">Пользователи</option>
+        </select>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Кто</label>
+        <select id="journal-user"
+          class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm bg-white min-w-[150px]
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400">
+          <option value="">Все пользователи</option>
+        </select>
+      </div>
+
+      <div class="flex flex-col gap-1">
+        <label class="text-[10px] font-medium text-slate-500 uppercase tracking-wide">С даты</label>
+        <input id="journal-from" type="date"
+          class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      </div>
+      <div class="flex flex-col gap-1">
+        <label class="text-[10px] font-medium text-slate-500 uppercase tracking-wide">По дату</label>
+        <input id="journal-to" type="date"
+          class="border border-slate-300 rounded-lg px-3 py-1.5 text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      </div>
+
+      <button onclick="resetJournalFilters()"
+        class="text-xs text-slate-400 hover:text-red-500 px-2 py-2">Сбросить</button>
+      <span id="journal-total" class="text-xs text-slate-400 ml-auto"></span>
+    </div>
+
+    <div id="journal-list" class="flex flex-col gap-1"></div>
+
+    <div class="flex items-center justify-center gap-3 mt-4">
+      <button id="journal-prev" onclick="journalPage(-1)"
+        class="text-xs px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500
+               hover:bg-slate-50 disabled:opacity-40">← Новее</button>
+      <span id="journal-page" class="text-xs text-slate-400"></span>
+      <button id="journal-next" onclick="journalPage(1)"
+        class="text-xs px-3 py-1.5 border border-slate-200 rounded-lg text-slate-500
+               hover:bg-slate-50 disabled:opacity-40">Старее →</button>
+    </div>
+  </section>
 </main>
 
 <!-- ── EVENT LOG ───────────────────────────────────────────────────────── -->
-<aside id="event-log-panel" style="display:none"
-  class="fixed bottom-4 right-4 w-72 bg-white border border-slate-200 rounded-xl shadow-lg z-10">
-  <div class="flex justify-between items-center px-3 py-2 bg-slate-50 rounded-t-xl border-b">
-    <span class="text-xs font-semibold text-slate-600">Event Log</span>
-    <button onclick="clearLog()" class="text-xs text-slate-400 hover:text-slate-600">Очистить</button>
-  </div>
-  <div id="event-log" class="overflow-y-auto text-[11px] font-mono p-2 space-y-0.5 thin-scroll" style="max-height:160px;"></div>
-</aside>
+<!-- Маленькая панель логов убрана: полная история теперь на вкладке «Журнал действий» -->
 
 <!-- ═══════════════════════════════════════════════════════════════════════
      MODAL: Add Column
@@ -738,7 +796,7 @@
      MODAL: Управление пользователями (только ADMIN)
 ════════════════════════════════════════════════════════════════════════ -->
 <dialog id="modal-admin">
-  <div class="w-full sm:w-[720px] max-h-[90vh] overflow-y-auto thin-scroll">
+  <div class="w-full sm:w-[620px] max-h-[90vh] overflow-y-auto thin-scroll">
     <div class="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-100">
       <h3 class="font-semibold text-slate-800 text-base">Пользователи</h3>
       <button onclick="document.getElementById('modal-admin').close()"

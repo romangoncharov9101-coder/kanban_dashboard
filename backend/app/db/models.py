@@ -129,7 +129,10 @@ class Card(Base):
     attachments: Mapped[list['Attachment']] = relationship('Attachment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
     priority: Mapped[CardPriority] = mapped_column(postgresql.ENUM(CardPriority, name="cardpriority"), default=CardPriority.LOW, nullable=False, server_default='LOW')
     comments: Mapped[list['Comment']] = relationship('Comment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
-    events: Mapped[list['Event']] = relationship('Event', back_populates='card', cascade='all, delete-orphan')
+    # Без delete-orphan: удаление карточки не должно стирать её историю.
+    # За обнуление ссылки отвечает ON DELETE SET NULL на стороне БД,
+    # поэтому ORM здесь не вмешивается (passive_deletes).
+    events: Mapped[list['Event']] = relationship('Event', back_populates='card', passive_deletes=True)
 
     # Несколько исполнителей на одну задачу
     assignees: Mapped[list['User']] = relationship(
@@ -180,24 +183,77 @@ class Comment(Base):
 
 
 class EventType(str, enum.Enum):
+    # Задачи
     CARD_CREATED = "CARD_CREATED"
     CARD_EDITED = "CARD_EDITED"
     CARD_MOVED = "CARD_MOVED"
+    CARD_ASSIGNED = "CARD_ASSIGNED"
     CARD_ARCHIVED = "CARD_ARCHIVED"
     CARD_RESTORED = "CARD_RESTORED"
     CARD_DELETED = "CARD_DELETED"
+    # Комментарии и файлы
     COMMENT_ADDED = "COMMENT_ADDED"
     COMMENT_EDITED = "COMMENT_EDITED"
     COMMENT_DELETED = "COMMENT_DELETED"
     ATTACHMENT_ADDED = "ATTACHMENT_ADDED"
     ATTACHMENT_DELETED = "ATTACHMENT_DELETED"
+    # Категории
+    COLUMN_CREATED = "COLUMN_CREATED"
+    COLUMN_UPDATED = "COLUMN_UPDATED"
+    COLUMN_DELETED = "COLUMN_DELETED"
+    # Проекты и подпроекты
+    PROJECT_CREATED = "PROJECT_CREATED"
+    PROJECT_UPDATED = "PROJECT_UPDATED"
+    PROJECT_DELETED = "PROJECT_DELETED"
+    # Учётные записи
+    USER_CREATED = "USER_CREATED"
+    USER_UPDATED = "USER_UPDATED"
+    USER_DEACTIVATED = "USER_DEACTIVATED"
+    USER_LOGIN = "USER_LOGIN"
+    USER_LOGOUT = "USER_LOGOUT"
+
+    @property
+    def category(self) -> str:
+        name = self.value
+        if name.startswith('CARD_'):
+            return 'card'
+        if name.startswith('COMMENT_') or name.startswith('ATTACHMENT_'):
+            return 'card'
+        if name.startswith('COLUMN_'):
+            return 'column'
+        if name.startswith('PROJECT_'):
+            return 'project'
+        return 'user' 
 
 
 class Event(Base):
+    """
+    Запись журнала действий.
+
+    Все человекочитаемые названия сохраняются прямо в строке события,
+    а не берутся из связей: журнал должен переживать удаление карточки,
+    колонки, проекта или пользователя и по-прежнему показывать, что
+    именно произошло. Ссылки на сущности остаются для перехода,
+    но обнуляются при удалении (SET NULL), а не уносят историю за собой.
+    """
     __tablename__ = 'events'
     id:  Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('users.user_id', ondelete='SET NULL'), nullable=False)
-    card_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('cards.id', ondelete='CASCADE'), nullable=True, index=True)
+
+    # Кто выполнил действие
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('users.user_id', ondelete='SET NULL'), nullable=True, index=True)
+    actor_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Над чем выполнено
+    card_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('cards.id', ondelete='SET NULL'), nullable=True, index=True)
+    card_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
+    project_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    column_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Кого касается действие (для событий с учётными записями и исполнителями)
+    target_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     event_type: Mapped[EventType] = mapped_column(pgEnum(EventType, name='eventtype'), nullable=False, index=True)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

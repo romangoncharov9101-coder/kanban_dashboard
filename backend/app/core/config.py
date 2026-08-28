@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     SESSION_COOKIE_SECURE: bool = False
     EXPOSE_DOCS: bool = True
 
+    # ─────────────────────────────────────────────────────────────
+    # Журнал действий
+    # ─────────────────────────────────────────────────────────────
+    LOG_DIR: str = "logs"
+    AUDIT_LOG_ENABLED: bool = True
+    AUDIT_LOG_RETENTION_DAYS: int = 180
+    EVENT_DB_RETENTION_DAYS: int = 90
+
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = ""
     ADMIN_SYNC_PASSWORD_ON_START: bool = False

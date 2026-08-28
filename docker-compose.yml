@@ -1,56 +1,106 @@
-version: "3.9"
+# ═══════════════════════════════════════════════════════════════════════
+#  Боевая конфигурация. Все секреты берутся из .env рядом с этим файлом.
+#  Локальные удобства (перезагрузка кода, открытые порты БД и бэкенда)
+#  вынесены в docker-compose.override.yml — он подхватывается
+#  автоматически при `docker compose up` и НЕ должен уезжать на сервер.
+#
+#  Запуск в проде:  docker compose -f docker-compose.yml up -d
+#  Локально:        docker compose up
+# ═══════════════════════════════════════════════════════════════════════
+
+# Синтаксис `${VAR:?текст}` роняет запуск с внятной ошибкой, если
+# переменная не задана. Это лучше, чем молча подняться с пустым паролем.
 
 services:
   db:
     image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: taskboard
-      POSTGRES_PASSWORD: taskboard
-      POSTGRES_DB: taskboard
+    restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?не задан POSTGRES_USER в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?не задан POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:?не задан POSTGRES_DB в .env}
+    # Портов наружу нет: база доступна только другим контейнерам
+    # по имени `db`. Проброс на хост включается в override для отладки.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U taskboard"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - internal
 
   backend:
     build:
       context: ./backend
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://taskboard:taskboard@db:5432/taskboard
-      CORS_ORIGINS: "http://localhost:8080"
-      LOG_LEVEL: INFO
-      EVENT_CLEANUP_INTERVAL: 300
-      EVENT_MAX_AGE_SECONDS: 86400
-      SESSION_SECRET_KEY: "change-me-generate-with-secrets-token-hex-32"
-      EXPOSE_DOCS: "false"
+      # Строка подключения собирается из тех же переменных, что и сама БД,
+      # чтобы пароль не был записан в двух местах и не разъезжался.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:?не задан SESSION_SECRET_KEY в .env}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-86400}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-tb_session}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-False}
+
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?не задан ADMIN_USERNAME в .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?не задан ADMIN_PASSWORD в .env}
+      ADMIN_SYNC_PASSWORD_ON_START: ${ADMIN_SYNC_PASSWORD_ON_START:-False}
+
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:9070}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      EXPOSE_DOCS: ${EXPOSE_DOCS:-False}
+
+      LOG_DIR: ${LOG_DIR:-logs}
+      AUDIT_LOG_ENABLED: ${AUDIT_LOG_ENABLED:-True}
+      AUDIT_LOG_RETENTION_DAYS: ${AUDIT_LOG_RETENTION_DAYS:-180}
+      EVENT_DB_RETENTION_DAYS: ${EVENT_DB_RETENTION_DAYS:-90}
+      EVENT_CLEANUP_INTERVAL: ${EVENT_CLEANUP_INTERVAL:-300}
+    # Наружу не публикуется: снаружи доступен только nginx,
+    # он же проксирует /api и /ws на этот контейнер.
     expose:
       - "8000"
-    ports:
-      - "9000:8000"
     depends_on:
       db:
         condition: service_healthy
     volumes:
-      - ./backend:/app
-      - ./backend:/app
-      - ./frontend:/frontend
+      - uploads:/app/uploads
+      - audit_logs:/app/logs
+      - ./frontend:/frontend:ro
     command: >
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
 
   frontend:
     image: nginx:alpine
+    restart: unless-stopped
     ports:
-      - "9070:80"
+      - "${FRONTEND_HOST_PORT:-9070}:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - backend
+    networks:
+      - internal
 
 volumes:
   pgdata:
+  uploads:
+  audit_logs:
+
+networks:
+  internal:
+    driver: bridge

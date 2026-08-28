@@ -4,8 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.core.sequrity import hash_password
-from app.db.models import User, UserRole
+from app.db.models import EventType, User, UserRole
 from app.db.schemas import AdminUserCreate, AdminUserOut, AdminUserUpdate
+from app.repositories.event_repo import EventRepository
 from app.repositories.session_repo import SessionRepository
 from app.repositories.user_repo import UserRepository
 
@@ -16,6 +17,7 @@ class AdminService:
         self.session = session
         self.repo = UserRepository(session)
         self.session_repo = SessionRepository(session)
+        self.event_repo = EventRepository(session)
 
     async def list_users(self) -> list[AdminUserOut]:
         users = await self.repo.get_all_users()
@@ -35,6 +37,14 @@ class AdminService:
             role=UserRole(data.role.value),
             created_by=actor.user_id,
         )
+        role_label = {'ADMIN': 'администратор', 'TEAM_LEAD': 'постановщик',
+                      'USER': 'исполнитель'}.get(user.role.value, user.role.value)
+        await self.event_repo.create(
+            event_type=EventType.USER_CREATED,
+            message=f'Создал пользователя «{user.username}» с ролью «{role_label}»',
+            actor=actor,
+            target_username=user.username,
+        )
         await self.session.commit()
         logger.info("User created by %s: %s (%s)", actor.username, user.username, user.role.value)
         return AdminUserOut.model_validate(user)
@@ -50,7 +60,7 @@ class AdminService:
             updates['password_hash'] = hash_password(data.password)
             kill_sessions = True
 
-        if data.rolw is not None and data.role.value != user.role.value:
+        if data.role is not None and data.role.value != user.role.value:
             new_role = UserRole(data.role.value)
             if user.role is UserRole.ADMIN and new_role is not UserRole.ADMIN:
                 await self._assert_not_last_admin(user)
@@ -72,6 +82,21 @@ class AdminService:
             await self.session_repo.delete_for_user(user.user_id)
             await self.repo.set_online(user, False)
 
+        labels = {'ADMIN': 'администратор', 'TEAM_LEAD': 'постановщик', 'USER': 'исполнитель'}
+        changes = []
+        if 'password_hash' in updates:
+            changes.append('сменил пароль')
+        if 'role' in updates:
+            changes.append(f'назначил роль «{labels.get(updates["role"].value, updates["role"].value)}»')
+        if 'is_active' in updates:
+            changes.append('вернул доступ' if updates['is_active'] else 'отключил доступ')
+
+        await self.event_repo.create(
+            event_type=EventType.USER_UPDATED,
+            message=f'Пользователь «{user.username}»: ' + ', '.join(changes),
+            actor=actor,
+            target_username=user.username,
+        )
         await self.session.commit()
         logger.info("User %s updated by %s: %s", user.username, actor.username, list(updates))
         return AdminUserOut.model_validate(user)
@@ -85,6 +110,12 @@ class AdminService:
         await self._assert_not_last_admin(user)
         await self.repo.update(user, is_active=False, online=False)
         await self.session_repo.delete_for_user(user.user_id)
+        await self.event_repo.create(
+            event_type=EventType.USER_DEACTIVATED,
+            message=f'Деактивировал пользователя «{user.username}»',
+            actor=actor,
+            target_username=user.username,
+        )
         await self.session.commit()
         logger.info("User %s deactivated by %s", user.username, actor.username)
 

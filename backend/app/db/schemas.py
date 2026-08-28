@@ -37,6 +37,7 @@ class EventType(str, Enum):
     CARD_CREATED = "CARD_CREATED"
     CARD_EDITED = "CARD_EDITED"
     CARD_MOVED = "CARD_MOVED"
+    CARD_ASSIGNED = "CARD_ASSIGNED"
     CARD_ARCHIVED = "CARD_ARCHIVED"
     CARD_RESTORED = "CARD_RESTORED"
     CARD_DELETED = "CARD_DELETED"
@@ -46,20 +47,47 @@ class EventType(str, Enum):
     ATTACHMENT_ADDED = "ATTACHMENT_ADDED"
     ATTACHMENT_DELETED = "ATTACHMENT_DELETED"
     COLUMN_CREATED = "COLUMN_CREATED"
+    COLUMN_UPDATED = "COLUMN_UPDATED"
     COLUMN_DELETED = "COLUMN_DELETED"
+    PROJECT_CREATED = "PROJECT_CREATED"
+    PROJECT_UPDATED = "PROJECT_UPDATED"
+    PROJECT_DELETED = "PROJECT_DELETED"
+    USER_CREATED = "USER_CREATED"
+    USER_UPDATED = "USER_UPDATED"
+    USER_DEACTIVATED = "USER_DEACTIVATED"
+    USER_LOGIN = "USER_LOGIN"
+    USER_LOGOUT = "USER_LOGOUT"
 
 
 class EventOut(BaseModel):
     id: UUID
-    card_id: UUID | None
-    user_id: UUID | None
-    user: UserShortOut | None
+    card_id: UUID | None = None
+    user_id: UUID | None = None
+    user: UserShortOut | None = None
     event_type: EventType
     message: str
-    payload: dict[str, Any]
+    payload: dict[str, Any] = {}
     created_at: datetime
 
+    # Названия сохранены в самом событии, чтобы журнал оставался
+    # читаемым после удаления карточки, проекта или пользователя
+    actor_username: str | None = None
+    actor_role: str | None = None
+    card_title: str | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
+    column_name: str | None = None
+    target_username: str | None = None
+
     model_config = {'from_attributes': True}
+
+
+class EventPage(BaseModel):
+    """Страница журнала действий."""
+    items: list[EventOut]
+    total: int
+    limit: int
+    offset: int
 
 #======================================================
 # Comments

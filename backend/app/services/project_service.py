@@ -4,10 +4,11 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import Project, User, UserRole
+from app.db.models import EventType, Project, User, UserRole
 from app.db.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from app.manager import manager
 from app.repositories.column_repo import ColumnRepository
+from app.repositories.event_repo import EventRepository
 from app.repositories.project_repo import ProjectRepository
 from app.repositories.user_repo import UserRepository
 
@@ -30,6 +31,7 @@ class ProjectService:
         self.repo = ProjectRepository(session)
         self.user_repo = UserRepository(session)
         self.column_repo = ColumnRepository(session)
+        self.event_repo = EventRepository(session)
 
     #======================================================
     # Доступ
@@ -212,6 +214,18 @@ class ProjectService:
             project = await self.repo.get_by_id(project.id)
 
         out = self._node(project, can_manage=True)
+        kind = 'подпроект' if parent else 'проект'
+        where = f' в проекте «{parent.name}»' if parent else ''
+        who = ', '.join(u.username for u in owners)
+        await self.event_repo.create(
+            event_type=EventType.PROJECT_CREATED,
+            message=f'Создал {kind} «{project.name}»{where}'
+                    + (f'; ответственные: {who}' if who else ''),
+            actor=actor,
+            project_id=project.id,
+            project_name=project.name,
+            payload=out.model_dump(mode='json'),
+        )
         await manager.publish('project_created', str(project.id), out.model_dump(mode='json'))
         await self.session.commit()
         logger.info("Project created by %s: %s", actor.username, project.name)
@@ -246,6 +260,25 @@ class ProjectService:
             return self._node(project, can_manage=await self.can_manage_project(project, actor))
 
         out = self._node(project, can_manage=True)
+        changes = []
+        if 'name' in updates:
+            changes.append(f'переименовал в «{updates["name"]}»')
+        if 'description' in updates:
+            changes.append('изменил описание')
+        if 'is_archived' in updates:
+            changes.append('отправил в архив' if updates['is_archived'] else 'вернул из архива')
+        if owners_changed:
+            names = ', '.join(u.username for u in project.owners) or 'никого'
+            changes.append(f'ответственные: {names}')
+
+        await self.event_repo.create(
+            event_type=EventType.PROJECT_UPDATED,
+            message=f'Проект «{project.name}»: ' + ('; '.join(changes) or 'без изменений'),
+            actor=actor,
+            project_id=project.id,
+            project_name=project.name,
+            payload=out.model_dump(mode='json'),
+        )
         await manager.publish('project_updated', str(project.id), out.model_dump(mode='json'))
         await self.session.commit()
         return out
@@ -268,7 +301,16 @@ class ProjectService:
             )
 
         name = project.name
+        kind = 'подпроект' if project.parent_id else 'проект'
+        child_count = len(project.children or [])
         await self.repo.delete(project)
+        await self.event_repo.create(
+            event_type=EventType.PROJECT_DELETED,
+            message=f'Удалил {kind} «{name}»'
+                    + (f' вместе с {child_count} подпроектами' if child_count else ''),
+            actor=actor,
+            project_name=name,
+        )
         await manager.publish('project_deleted', str(project_id), {'id': str(project_id), 'name': name})
         await self.session.commit()
         logger.info("Project deleted by %s: %s", actor.username, name)
