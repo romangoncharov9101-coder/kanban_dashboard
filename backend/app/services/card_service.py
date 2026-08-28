@@ -644,8 +644,8 @@ class CardService:
         self._assert_can_edit_attachments(card, actor)
 
         count = await self.repo.get_attachment_count(card_id)
-        if count >= 5:
-            raise HTTPException(status_code=400, detail="Максимум 5 файлов на карточку.")
+        if count >= 20:
+            raise HTTPException(status_code=400, detail="Максимум 20 файлов на карточку.")
 
         MAX_SIZE = 5 * 1024 * 1024
         file_content = await file.read()
