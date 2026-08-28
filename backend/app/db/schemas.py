@@ -232,8 +232,8 @@ class CardOut(BaseModel):
     @field_validator('attachments')
     @classmethod
     def check_attachments_limit(cls, v: list[AttachmentOut]):
-        if len(v) > 5:
-            return v[:5]
+        if len(v) > 20:
+            return v[:20]
         return v
 
     model_config = {'from_attributes': True}
