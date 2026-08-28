@@ -12,6 +12,21 @@ class UserRole(str, Enum):
     USER = "USER"
 
 
+# Управляющие и невидимые символы в названиях недопустимы — они ломают
+# вёрстку и логи. Всё остальное печатное разрешено: скобки, кавычки,
+# тире, запятые и прочая пунктуация в названиях нужны постоянно.
+_CTRL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\ufeff]')
+
+
+def clean_name(value: str, what: str) -> str:
+    v = (value or '').strip()
+    if not v:
+        raise ValueError(f'{what} не может быть пустым')
+    if _CTRL_CHARS.search(v):
+        raise ValueError(f'{what} содержит недопустимые символы')
+    return v
+
+
 class UserShortOut(BaseModel):
     user_id: UUID
     username: str
@@ -129,9 +144,7 @@ class CardCreate(BaseModel):
     @field_validator('title')
     @classmethod
     def validate_title(cls, v: str):
-        if not v.strip():
-            raise ValueError('Название карточки не может быть пустым')
-        return v
+        return clean_name(v, 'Название задачи')
 
     @field_validator('assignee_ids')
     @classmethod
@@ -157,6 +170,12 @@ class CardCreate(BaseModel):
 
 class CardUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
+
+    @field_validator('title')
+    @classmethod
+    def validate_title(cls, v: str | None):
+        return v if v is None else clean_name(v, 'Название задачи')
+
     description: str | None = None
     column_id: UUID | None = None
     assignee_ids: list[UUID] | None = Field(None, max_length=20)
@@ -246,13 +265,17 @@ class ProjectCreate(BaseModel):
     @field_validator('name')
     @classmethod
     def validate_name(cls, v: str):
-        if not v.strip():
-            raise ValueError('Название проекта не может быть пустым')
-        return v.strip()
+        return clean_name(v, 'Название проекта')
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=150)
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v: str | None):
+        return v if v is None else clean_name(v, 'Название проекта')
+
     description: str | None = Field(None, max_length=2000)
     position: int | None = Field(None, ge=0)
     is_archived: bool | None = None
@@ -289,13 +312,17 @@ class ColumnCreate(BaseModel):
     @field_validator('name')
     @classmethod
     def validate_name(cls, v: str):
-        if not v.strip():
-            raise ValueError('Название колонки не может быть пустым')
-        return v
+        return clean_name(v, 'Название категории')
 
 
 class ColumnUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v: str | None):
+        return v if v is None else clean_name(v, 'Название категории')
+
     position: int | None = Field(None, ge=0)
     is_user_movable: bool | None = None
 

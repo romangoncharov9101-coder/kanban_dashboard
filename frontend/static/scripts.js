@@ -236,7 +236,19 @@ function esc(s) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _usernameRe = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9]{1,100}$/;
-const _colNameRe  = /^[a-zA-Zа-яА-ЯёЁґҐєЄіІїЇ0-9\s]{1,100}$/;
+// Раньше здесь был белый список из букв, цифр и пробелов — он резал
+// скобки, кавычки, тире и запятые в названиях. Теперь наоборот:
+// запрещены только управляющие и невидимые символы, всё печатное можно.
+const _CTRL_CHARS = /[\p{Cc}\p{Cf}]/u;
+
+// Возвращает текст ошибки или null, если название допустимо
+function validateName(value, maxLen, what) {
+  const v = String(value || '').trim();
+  if (!v) return `${what} не может быть пустым`;
+  if (v.length > maxLen) return `${what}: не более ${maxLen} символов`;
+  if (_CTRL_CHARS.test(v)) return `${what} содержит недопустимые символы`;
+  return null;
+}
  
 // Самостоятельной регистрации нет: аккаунты заводит администратор.
 // Роли: ADMIN — управляет пользователями; TEAM_LEAD — ведёт доску;
@@ -1766,8 +1778,8 @@ function openAddColumn() {
  
 async function submitAddColumn() {
   const name = document.getElementById('new-col-name').value.trim();
-  if (!name) return toast.warn('Название колонки обязательно');
-  if (!_colNameRe.test(name)) return toast.warn('Название: только буквы, цифры и пробелы');
+  const nameError = validateName(name, 100, 'Название категории');
+  if (nameError) return toast.warn(nameError);
   const isUserMovable = !!document.getElementById('new-col-user-movable')?.checked;
   const result = await api('POST', '/columns', {
     name,
@@ -2224,8 +2236,8 @@ async function submitCard() {
     const desc       = document.getElementById('card-desc-input').value.trim();
     const assigneeIds = selectedAssignees.map(a => a.user_id);
 
-    if (!title) return toast.warn('Заголовок обязателен');
-    if (!_colNameRe.test(title)) return toast.warn('Название: только буквы, цифры и пробелы');
+    const titleError = validateName(title, 200, 'Заголовок задачи');
+    if (titleError) return toast.warn(titleError);
 
 
     const deadlineRaw = document.getElementById('card-deadline-input').value;
@@ -3279,7 +3291,8 @@ async function submitProject() {
   const name = document.getElementById('project-name').value.trim();
   const description = document.getElementById('project-description').value.trim() || null;
 
-  if (!name) return toast.warn('Название проекта обязательно');
+  const projectNameError = validateName(name, 150, 'Название проекта');
+  if (projectNameError) return toast.warn(projectNameError);
 
   const ownerIds = selectedOwners.map(o => o.user_id);
   let result;
