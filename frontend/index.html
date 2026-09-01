@@ -853,14 +853,27 @@
       class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
 
     <div id="project-owners-block">
-      <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Ответственные</label>
+      <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Постановщики</label>
       <div id="project-owner-chips" class="flex flex-wrap gap-1.5 mb-2 empty:hidden"></div>
       <select id="project-owner-select" onchange="addProjectOwner(this.value); this.value=''"
         class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
         <option value="">Добавить постановщика…</option>
       </select>
       <p class="text-[10px] text-slate-400 mb-4">
-        Ответственный за проект ведёт и все его подпроекты.
+        Постановщик ведёт проект и все его подпроекты: создаёт категории и ставит задачи.
+      </p>
+    </div>
+
+    <div id="project-members-block">
+      <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Ответственные</label>
+      <div id="project-member-chips" class="flex flex-wrap gap-1.5 mb-2 empty:hidden"></div>
+      <select id="project-member-select" onchange="addProjectMember(this.value); this.value=''"
+        class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        <option value="">Добавить исполнителя…</option>
+      </select>
+      <p class="text-[10px] text-slate-400 mb-4">
+        Попадают в исполнители новых задач, видят проект целиком и могут заводить
+        себе задачи в открытых категориях.
       </p>
     </div>
 

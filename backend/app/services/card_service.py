@@ -243,12 +243,18 @@ class CardService:
         from app.services.project_service import ProjectService
         project_service = ProjectService(self.session)
 
+        card_project = await project_service.assert_can_view(col.project_id, author)
+
         if author.role is UserRole.ADMIN or await project_service.can_manage_project(
-            await project_service.assert_can_view(col.project_id, author), author
+            card_project, author
         ):
-            pass  # админ и ответственный за проект заводят задачи как обычно
-        elif col.is_user_creatable:
-            # Личная задача исполнителя в разрешённой категории
+            pass  # админ и постановщик проекта заводят задачи как обычно
+        elif col.is_user_creatable and await project_service.is_project_member(
+            card_project, author
+        ):
+            # Личную задачу заводит только ответственный этого узла дерева.
+            # Ответственный за родительский проект здесь посторонний,
+            # даже если категория открыта.
             pass
         else:
             raise HTTPException(
@@ -256,11 +262,13 @@ class CardService:
                 detail='В этой категории вы не можете создавать задачи.',
             )
 
-        requested_ids = list(data.assignee_ids)
-        # Автор личной задачи всегда её исполнитель — иначе он потеряет
-        # собственную задачу из виду и не сможет менять её статус.
-        if not author.is_manager and author.user_id not in requested_ids:
-            requested_ids.insert(0, author.user_id)
+        if author.is_manager:
+            requested_ids = list(data.assignee_ids)
+        else:
+            # Личная задача исполнителя: состав жёстко равен автору.
+            # Ни добавить коллегу, ни убрать себя он не может — иначе
+            # задача уехала бы к тому, кто её не заводил.
+            requested_ids = [author.user_id]
 
         assignees = await self._resolve_assignees(requested_ids)
 
@@ -352,6 +360,15 @@ class CardService:
 
         # Исполнители: полная замена списка
         assignees_changed = False
+        if ('assignee_ids' in sent_fields and data.assignee_ids is not None
+                and not actor.is_manager):
+            # Состав исполнителей личной задачи неизменен: её автор
+            # остаётся единственным исполнителем.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='В собственной задаче нельзя менять исполнителей.',
+            )
+
         if 'assignee_ids' in sent_fields and data.assignee_ids is not None:
             requested = set(data.assignee_ids)
             if requested != old_assignee_ids:

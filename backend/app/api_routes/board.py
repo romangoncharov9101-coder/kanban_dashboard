@@ -80,6 +80,14 @@ async def get_board_init(
             'parent_id': str(project.parent_id) if project.parent_id else None,
             'is_root': project.is_root,
             'can_manage': can_manage,
+            # Ответственный исполнитель работает со всем проектом,
+            # поэтому клиент не должен прятать от него пустые категории.
+            'is_member': await project_service.is_project_member(project, current_user),
+            # Ответственные проекта: клиент подставляет их в исполнители
+            # новой задачи, чтобы админ не набирал состав руками.
+            # Для подпроекта берём и своих, и унаследованных от родителя —
+            # ответственный за проект отвечает и за его подпроекты.
+            'members': await _effective_members(project_service, project),
         },
         'columns': columns,
         'cards': cards,
@@ -145,6 +153,15 @@ async def get_global_board(
         'online_users': await UserService(db).get_online_users(),
         'me': _me(current_user),
     }
+
+
+async def _effective_members(project_service: ProjectService, project) -> list[dict]:
+    """Ответственные проекта вместе с унаследованными от родителя."""
+    member_ids = await project_service.get_member_ids_for_card(project.id)
+    if not member_ids:
+        return []
+    users = await project_service.user_repo.get_users_by_ids(member_ids)
+    return [{'user_id': str(u.user_id), 'username': u.username} for u in users]
 
 
 def _me(user: User) -> dict:

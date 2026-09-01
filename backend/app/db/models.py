@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint, Table, Column as SAColumn
+from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint, Table, and_, Column as SAColumn
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import UUID, ENUM as pgEnum
@@ -90,15 +90,17 @@ class Column(Base):
 
     # Разрешено ли обычному пользователю (role=USER) перетаскивать
     # свои карточки В эту колонку. Управляется админом/тим-лидером.
+    # Открыто по умолчанию: ответственные работают со всеми категориями,
+    # админ закрывает точечно. Существующие категории миграция не трогает.
     is_user_movable: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default='false'
+        Boolean, nullable=False, default=True, server_default='true'
     )
 
     # Разрешено ли исполнителю заводить в этой категории собственные задачи.
     # Такие задачи видит только их автор, назначенные исполнители и админ —
     # постановщик проекта их не видит. Поэтому флаг ставит только админ.
     is_user_creatable: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default='false'
+        Boolean, nullable=False, default=True, server_default='true'
     )
 
     cards: Mapped[list['Card']] = relationship('Card', back_populates='column', lazy='select')
@@ -320,6 +322,7 @@ class Notification(Base):
 class ProjectRole(str, enum.Enum):
     """Роль пользователя внутри конкретного проекта."""
     OWNER = "OWNER"      # постановщик, отвечающий за проект
+    MEMBER = "MEMBER"    # ответственный исполнитель, работающий в проекте
 
 
 project_members = Table(
@@ -367,8 +370,30 @@ class Project(Base):
     )
     parent: Mapped['Project | None'] = relationship('Project', back_populates='children', remote_side=[id])
 
+    # Обе связи только для чтения: состав правится core-запросами
+    # в репозитории, потому что у таблицы связи есть своя колонка роли.
     owners: Mapped[list['User']] = relationship(
-        'User', secondary=project_members, lazy='selectin', order_by='User.username'
+        'User',
+        secondary=project_members,
+        primaryjoin=lambda: and_(
+            Project.id == project_members.c.project_id,
+            project_members.c.role_in_project == ProjectRole.OWNER,
+        ),
+        secondaryjoin=lambda: User.user_id == project_members.c.user_id,
+        viewonly=True, lazy='selectin', order_by='User.username',
+    )
+
+    # Ответственные исполнители: попадают в исполнители новых задач,
+    # видят проект целиком и заводят в нём собственные задачи.
+    members: Mapped[list['User']] = relationship(
+        'User',
+        secondary=project_members,
+        primaryjoin=lambda: and_(
+            Project.id == project_members.c.project_id,
+            project_members.c.role_in_project == ProjectRole.MEMBER,
+        ),
+        secondaryjoin=lambda: User.user_id == project_members.c.user_id,
+        viewonly=True, lazy='selectin', order_by='User.username',
     )
 
     @property

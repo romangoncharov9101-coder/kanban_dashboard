@@ -49,6 +49,13 @@ class ProjectService:
             # Ответственный за корневой проект отвечает и за его подпроекты.
             for pid in list(owned):
                 ids.update(await self.repo.get_children_ids(pid))
+        # Ответственный исполнитель видит проект целиком, даже пока
+        # ему не назначили ни одной задачи.
+        # Ответственность не наследуется вниз: подпроекты родительского
+        # проекта не открываются автоматически, туда назначают отдельно.
+        member_of = await self.repo.get_member_project_ids(viewer.user_id)
+        ids.update(member_of)
+
         ids.update(await self.repo.get_project_ids_with_assignments(viewer.user_id))
         ids.update(await self.repo.get_project_ids_with_authored_cards(viewer.user_id))
 
@@ -83,6 +90,28 @@ class ProjectService:
         if project.id in owned:
             return True
         return project.parent_id is not None and project.parent_id in owned
+
+    async def is_project_member(self, project: Project, user: User) -> bool:
+        """
+        Ответственный исполнитель именно этого узла дерева.
+
+        Ответственность НЕ наследуется: за проект и за его подпроект
+        отвечают разные люди. Ответственный за родительский проект
+        не работает в подпроекте — не попадает в исполнителей его задач
+        и не создаёт там свои, даже если категория открыта.
+        """
+        member_of = set(await self.repo.get_member_project_ids(user.user_id))
+        return project.id in member_of
+
+    async def get_member_ids_for_card(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+        """
+        Ответственные этого проекта — только свои.
+        Состав родителя сюда не подмешивается: у подпроекта своя команда.
+        """
+        project = await self.repo.get_by_id(project_id)
+        if not project:
+            return []
+        return list(await self.repo.get_member_ids(project.id))
 
     async def assert_can_view(self, project_id: uuid.UUID, user: User) -> Project:
         project = await self.repo.get_by_id(project_id)
@@ -132,6 +161,7 @@ class ProjectService:
             position=project.position,
             is_archived=project.is_archived,
             owners=[{'user_id': u.user_id, 'username': u.username} for u in project.owners],
+            members=[{'user_id': u.user_id, 'username': u.username} for u in project.members],
             children=children or [],
             can_manage=can_manage,
             open_tasks=open_tasks,
@@ -206,6 +236,7 @@ class ProjectService:
                 )
 
         owners = await self._resolve_owners(data.owner_ids)
+        members = await self._resolve_members(data.member_ids)
 
         position = await self.repo.get_max_position(data.parent_id) + 1
         project = await self.repo.create(
@@ -218,6 +249,9 @@ class ProjectService:
 
         if owners:
             await self.repo.set_owners(project, [u.user_id for u in owners])
+        if members:
+            await self.repo.set_members(project, [u.user_id for u in members])
+        if owners or members:
             project = await self.repo.get_by_id(project.id)
 
         out = self._node(project, can_manage=True)
@@ -259,6 +293,11 @@ class ProjectService:
             await self.repo.set_owners(project, [u.user_id for u in owners])
             owners_changed = True
 
+        if data.member_ids is not None:
+            members = await self._resolve_members(data.member_ids)
+            await self.repo.set_members(project, [u.user_id for u in members])
+            owners_changed = True
+
         if updates:
             project = await self.repo.update(project, **updates)
         elif owners_changed:
@@ -275,8 +314,9 @@ class ProjectService:
         if 'is_archived' in updates:
             changes.append('отправил в архив' if updates['is_archived'] else 'вернул из архива')
         if owners_changed:
-            names = ', '.join(u.username for u in project.owners) or 'никого'
-            changes.append(f'ответственные: {names}')
+            leads = ', '.join(u.username for u in project.owners) or 'никого'
+            execs = ', '.join(u.username for u in project.members) or 'никого'
+            changes.append(f'постановщики: {leads}; ответственные: {execs}')
 
         await self.event_repo.create(
             event_type=EventType.PROJECT_UPDATED,
@@ -321,6 +361,30 @@ class ProjectService:
         await manager.publish('project_deleted', str(project_id), {'id': str(project_id), 'name': name})
         await self.session.commit()
         logger.info("Project deleted by %s: %s", actor.username, name)
+
+    async def _resolve_members(self, member_ids: list[uuid.UUID]) -> list[User]:
+        """Ответственным исполнителем можно назначить только роль «Исполнитель»."""
+        if not member_ids:
+            return []
+        users = await self.user_repo.get_users_by_ids(member_ids)
+        found = {u.user_id for u in users}
+        missing = [str(i) for i in member_ids if i not in found]
+        if missing:
+            raise HTTPException(status_code=404, detail=f'Пользователь не найден: {", ".join(missing)}')
+
+        bad = [u.username for u in users if u.role is not UserRole.USER]
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f'Ответственным можно назначить только исполнителя: {", ".join(bad)}',
+            )
+        inactive = [u.username for u in users if not u.is_active]
+        if inactive:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f'Пользователь деактивирован: {", ".join(inactive)}',
+            )
+        return users
 
     async def _resolve_owners(self, owner_ids: list[uuid.UUID]) -> list[User]:
         if not owner_ids:

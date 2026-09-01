@@ -16,7 +16,9 @@ let selectedAssignees = [];   // [{user_id, username}] в открытой мо�
 let projects = [];            // дерево проектов, доступное текущему пользователю
 let currentProject = null;    // {id, name, parent_id, is_root, can_manage}
 let subSections = [];         // сводка подпроектов на корневом проекте
-let selectedOwners = [];      // ответственные в модалке проекта
+let selectedOwners = [];      // постановщики в модалке проекта
+let selectedMembers = [];     // ответственные исполнители в модалке проекта
+let _assigneesLocked = false; // состав исполнителей нельзя менять (личная задача)
 const GLOBAL_BOARD_ID = '__all__';  // псевдо-проект «Все проекты» (только админ)
 const JOURNAL_ID = '__journal__';   // вкладка «Журнал действий» (только админ)
 
@@ -318,7 +320,10 @@ function canCreateInColumn(col) {
   if (!currentUser || !col) return false;
   if (isAdmin()) return true;
   if (isManager() && currentProject?.can_manage) return true;
-  return !!col.is_user_creatable;
+  // Заводить задачи может только ответственный именно этого проекта
+  // или подпроекта. Ответственный за родителя здесь посторонний,
+  // даже если категория открыта для создания.
+  return !!(col.is_user_creatable && currentProject?.is_member);
 }
 
 function canMoveInto(columnId, card) {
@@ -858,12 +863,24 @@ function updateColumnsVisibility() {
     //   иначе перетаскивать будет некуда: пустая колонка-приёмник
     //   пропадала бы с доски и дропнуть карточку было невозможно.
     const canManageThisProject = !!(currentProject && currentProject.can_manage);
+    // Ответственный исполнитель работает со всем проектом целиком —
+    // прятать от него категории нельзя, иначе он не найдёт, куда
+    // положить задачу.
+    const isProjectMember = !!(currentProject && currentProject.is_member);
     const col = columns.find(c => String(c.id) === String(colId));
+
+    // Пустая категория нужна, если в неё можно перетащить задачу
+    // ИЛИ завести там новую: иначе открытая для создания колонка
+    // исчезала с доски и кнопка «+ Задача» была недоступна.
     const isDropTarget = !!(col && col.is_user_movable);
+    const isCreateTarget = !!(col && col.is_user_creatable);
+
     const hiddenByRole = !isAdmin()
       && !canManageThisProject
+      && !isProjectMember
       && !hasCards
       && !isDropTarget
+      && !isCreateTarget
       && currentFilterMode !== 'archived';
 
     if (hiddenByFilter || hiddenByRole) {
@@ -2046,7 +2063,7 @@ function _renderAssigneeChips() {
   const box = document.getElementById('assignee-chips');
   if (!box) return;
 
-  const locked = cardModalReadOnly || cardModalCommentOnly;
+  const locked = cardModalReadOnly || cardModalCommentOnly || _assigneesLocked;
 
   if (!selectedAssignees.length) {
     box.innerHTML = locked
@@ -2154,10 +2171,14 @@ function _applyCardModalMode(opts = {}) {
   });
 
   // Состав исполнителей меняет только автор или админ
+  // Состав исполнителей личной задачи неизменен: автор — единственный
+  // исполнитель, поэтому пикер ему не показываем вовсе.
+  const lockedAssignees = ro || commentOnly || opts.lockAssignees === true;
+  _assigneesLocked = opts.lockAssignees === true;
   const picker = document.getElementById('assignee-picker');
-  if (picker) picker.style.display = (ro || commentOnly) ? 'none' : '';
+  if (picker) picker.style.display = lockedAssignees ? 'none' : '';
   const assignHint = document.querySelector('#assignees-block p');
-  if (assignHint) assignHint.style.display = (ro || commentOnly) ? 'none' : '';
+  if (assignHint) assignHint.style.display = lockedAssignees ? 'none' : '';
   closeAssigneePicker();
 
   // Загрузка вложений — автору и админу. Уже прикреплённые файлы
@@ -2224,7 +2245,7 @@ async function openAddCard(colId) {
   cardModalReadOnly = false;
   cardModalCommentOnly = false;
   selectedAssignees = [];
-  _applyCardModalMode();
+  _applyCardModalMode({ lockAssignees: !isManager() });
   await _fillAssigneeSelect();
   _renderAssigneeChips();
 
@@ -2235,13 +2256,20 @@ async function openAddCard(colId) {
   document.getElementById('card-desc-input').value = '';
   _setStatusRadio('NOT_STARTED');
 
-  // Исполнитель заводит задачу себе: подставляем его сразу, иначе
-  // задача останется ничьей и пропадёт из его выдачи.
   if (currentUser && !isManager()) {
+    // Личная задача: исполнителем становится только автор, иначе
+    // задача останется ничьей и пропадёт из его выдачи.
     selectedAssignees = [{ user_id: currentUser.user_id, username: currentUser.username }];
-    _renderAssigneeChips();
-    _refreshAssigneeSelect();
+  } else {
+    // Задачу ставит админ или постановщик: подставляем ответственных
+    // проекта, включая унаследованных от родительского проекта.
+    // Лишних можно убрать крестиком, добавить любого — через пикер.
+    selectedAssignees = (currentProject?.members || []).map(m => ({
+      user_id: m.user_id, username: m.username,
+    }));
   }
+  _renderAssigneeChips();
+  _refreshAssigneeSelect();
 
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
@@ -2288,10 +2316,13 @@ async function openEditCard(cardId) {
   document.getElementById('card-title-input').value = card.title;
   document.getElementById('card-desc-input').value = card.description || '';
   _setStatusRadio(card.status);
+  // Личная задача исполнителя: состав менять нельзя
+  const ownPersonalCard = !isManager() && String(card.created_by) === String(currentUser?.user_id);
   _applyCardModalMode({
     hideAttachments: isArchived,
     hideComments: isArchived,
     canChangeStatus: canChangeStatus(card),
+    lockAssignees: ownPersonalCard,
   });
 
   const commentField = document.getElementById('card-new-comment');
@@ -3407,6 +3438,7 @@ async function openProjectModal(projectId, parentId) {
 
   const existing = projectId ? _findProject(projectId) : null;
   selectedOwners = existing ? (existing.owners || []).map(o => ({ ...o })) : [];
+  selectedMembers = existing ? (existing.members || []).map(m => ({ ...m })) : [];
 
   document.getElementById('project-edit-id').value = projectId || '';
   document.getElementById('project-parent-id').value = parentId || '';
@@ -3420,12 +3452,15 @@ async function openProjectModal(projectId, parentId) {
   if (delBtn) delBtn.style.display = existing ? '' : 'none';
 
   // Ответственный назначается на проект целиком; у подпроекта он наследуется
+  // Настройки проекта и подпроекта одинаковы: состав задаётся на любом
+  // уровне, при этом участники корня наследуются его подпроектами.
   const ownersBlock = document.getElementById('project-owners-block');
-  const isSub = !!(parentId || (existing && existing.parent_id));
-  if (ownersBlock) ownersBlock.style.display = isSub ? 'none' : '';
+  if (ownersBlock) ownersBlock.style.display = '';
 
   _renderOwnerChips();
+  _renderMemberChips();
   await _fillOwnerOptions();
+  await _fillMemberOptions();
 
   document.getElementById('modal-project').showModal();
   setTimeout(() => document.getElementById('project-name').focus(), 50);
@@ -3443,6 +3478,50 @@ async function _fillOwnerOptions() {
       .filter(u => !selectedOwners.some(o => String(o.user_id) === String(u.user_id)))
       .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
       .join('');
+}
+
+async function _fillMemberOptions() {
+  const sel = document.getElementById('project-member-select');
+  if (!sel) return;
+  const users = await api('GET', '/admin/users', undefined, true);
+  // Ответственным можно назначить только пользователя с ролью «Исполнитель»
+  const eligible = (users || []).filter(u => u.is_active && u.role === 'USER');
+
+  sel.innerHTML = '<option value="">Добавить исполнителя…</option>' +
+    eligible
+      .filter(u => !selectedMembers.some(m => String(m.user_id) === String(u.user_id)))
+      .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
+      .join('');
+}
+
+function addProjectMember(value) {
+  if (!value) return;
+  const [id, username] = value.split('|');
+  if (selectedMembers.some(m => String(m.user_id) === String(id))) return;
+  selectedMembers.push({ user_id: id, username });
+  _renderMemberChips();
+  _fillMemberOptions();
+}
+
+function removeProjectMember(userId) {
+  selectedMembers = selectedMembers.filter(m => String(m.user_id) !== String(userId));
+  _renderMemberChips();
+  _fillMemberOptions();
+}
+
+function _renderMemberChips() {
+  const box = document.getElementById('project-member-chips');
+  if (!box) return;
+  box.innerHTML = selectedMembers.map(m => `
+    <span class="inline-flex items-center gap-1.5 bg-white border border-slate-200 shadow-sm
+                 rounded-full pl-1 pr-1 py-1 text-xs">
+      <span class="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold
+                   ${_avatarColor(m.username)}">${esc(_initials(m.username))}</span>
+      <span class="text-slate-700 font-medium">${esc(m.username)}</span>
+      <button type="button" onclick="removeProjectMember('${m.user_id}')"
+        class="w-4 h-4 rounded-full flex items-center justify-center text-slate-400
+               hover:bg-red-50 hover:text-red-500 transition-colors" title="Убрать">&times;</button>
+    </span>`).join('');
 }
 
 function addProjectOwner(value) {
@@ -3482,15 +3561,17 @@ async function submitProject() {
   if (projectNameError) return toast.warn(projectNameError);
 
   const ownerIds = selectedOwners.map(o => o.user_id);
+  const memberIds = selectedMembers.map(m => m.user_id);
   let result;
 
+  // Проект и подпроект настраиваются одинаково: состав задаётся
+  // на любом уровне, поэтому отдельной ветки для подпроекта нет.
   if (id) {
-    const existing = _findProject(id);
-    const payload = { name, description };
-    if (!existing || !existing.parent_id) payload.owner_ids = ownerIds;
-    result = await api('PATCH', `/projects/${id}`, payload);
+    result = await api('PATCH', `/projects/${id}`, {
+      name, description, owner_ids: ownerIds, member_ids: memberIds,
+    });
   } else {
-    const payload = { name, description, owner_ids: parentId ? [] : ownerIds };
+    const payload = { name, description, owner_ids: ownerIds, member_ids: memberIds };
     if (parentId) payload.parent_id = parentId;
     result = await api('POST', '/projects', payload);
   }

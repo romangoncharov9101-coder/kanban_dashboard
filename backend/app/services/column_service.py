@@ -29,42 +29,54 @@ class ColumnService:
 
     async def _visible_for(self, cols: list, viewer: User | None) -> list:
         """
-        Личная категория (is_user_creatable) не показывается обычному
-        исполнителю, пока в ней нет задачи, назначенной именно ему —
-        такую категорию сначала должен «открыть» постановщик или админ,
-        поставив туда первую задачу. Админу и постановщику проекта
-        категории видны все, как и раньше.
+        Какие категории проекта показывать зрителю.
+
+        Кто работает в проекте — админ, постановщик проекта и ответственный
+        исполнитель — видят все категории, включая открытые под личные
+        задачи и пока пустые. Иначе ответственному некуда положить свою
+        задачу: пустая категория просто исчезала бы с доски.
+
+        Ответственность наследуется только вниз, от проекта к подпроектам.
+        Ответственный за подпроект в родительском проекте посторонний:
+        там ему видны лишь категории, где у него есть своя задача.
+        Родитель при этом остаётся в меню — иначе подпроект висел бы
+        в дереве без корня.
         """
         if viewer is None or viewer.role is UserRole.ADMIN:
+            return cols
+        if not cols:
             return cols
 
         from app.services.project_service import ProjectService
         project_service = ProjectService(self.session)
 
-        personal_ids = [c.id for c in cols if c.is_user_creatable]
-        if not personal_ids:
-            return cols
-
-        # Постановщику/владельцу проекта личные категории видны всегда —
-        # ограничение касается только рядовых исполнителей.
         by_project: dict = {}
         for c in cols:
             by_project.setdefault(c.project_id, []).append(c)
 
-        unlocked: set = set()
+        visible: list = []
+        foreign_ids: list = []
+
         for project_id, project_cols in by_project.items():
-            proj_personal_ids = [c.id for c in project_cols if c.is_user_creatable]
-            if not proj_personal_ids:
-                continue
             project = await project_service.repo.get_by_id(project_id)
-            if project and await project_service.can_manage_project(project, viewer):
-                unlocked.update(proj_personal_ids)
+            works_here = bool(project) and (
+                await project_service.can_manage_project(project, viewer)
+                or await project_service.is_project_member(project, viewer)
+            )
+            if works_here:
+                visible.extend(project_cols)
+            else:
+                foreign_ids.extend(c.id for c in project_cols)
 
-        remaining = [cid for cid in personal_ids if cid not in unlocked]
-        if remaining:
-            unlocked.update(await self.repo.get_creatable_ids_with_assignment(remaining, viewer.user_id))
+        if foreign_ids:
+            with_cards = await self.repo.get_column_ids_with_user_cards(
+                foreign_ids, viewer.user_id
+            )
+            visible.extend(c for c in cols if c.id in with_cards)
 
-        return [c for c in cols if not c.is_user_creatable or c.id in unlocked]
+        # Порядок задаёт позиция колонки, а не порядок обхода проектов
+        visible.sort(key=lambda c: (c.position, c.name))
+        return visible
 
     async def get_for_projects(self, project_ids: list) -> list[ColumnOut]:
         cols = await self.repo.get_for_projects(project_ids)

@@ -15,7 +15,9 @@ class ProjectRepository:
     def _base(self):
         return select(Project).options(
             selectinload(Project.owners),
+            selectinload(Project.members),
             selectinload(Project.children).selectinload(Project.owners),
+            selectinload(Project.children).selectinload(Project.members),
         )
 
     async def get_by_id(self, project_id: uuid.UUID) -> Project | None:
@@ -78,14 +80,33 @@ class ProjectRepository:
     #======================================================
     # Владельцы (постановщики, отвечающие за проект)
     #======================================================
-    async def get_owner_ids(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+    async def get_participant_ids(
+        self, project_id: uuid.UUID, role: ProjectRole
+    ) -> list[uuid.UUID]:
         result = await self.session.execute(
-            select(project_members.c.user_id).where(project_members.c.project_id == project_id)
+            select(project_members.c.user_id).where(
+                project_members.c.project_id == project_id,
+                project_members.c.role_in_project == role,
+            )
         )
         return list(result.scalars().all())
 
-    async def set_owners(self, project: Project, user_ids: list[uuid.UUID]) -> None:
-        current = set(await self.get_owner_ids(project.id))
+    async def get_owner_ids(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+        return await self.get_participant_ids(project_id, ProjectRole.OWNER)
+
+    async def get_member_ids(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+        return await self.get_participant_ids(project_id, ProjectRole.MEMBER)
+
+    async def set_participants(
+        self, project: Project, user_ids: list[uuid.UUID], role: ProjectRole
+    ) -> None:
+        """
+        Заменяет состав участников с указанной ролью.
+        Роли живут в одной таблице, поэтому все запросы обязаны
+        фильтровать по role_in_project — иначе постановщики и
+        ответственные затрут друг друга.
+        """
+        current = set(await self.get_participant_ids(project.id, role))
         target = set(user_ids)
 
         to_remove = current - target
@@ -95,6 +116,7 @@ class ProjectRepository:
             await self.session.execute(
                 delete(project_members).where(
                     project_members.c.project_id == project.id,
+                    project_members.c.role_in_project == role,
                     project_members.c.user_id.in_(to_remove),
                 )
             )
@@ -105,7 +127,7 @@ class ProjectRepository:
                     {
                         'project_id': project.id,
                         'user_id': uid,
-                        'role_in_project': ProjectRole.OWNER,
+                        'role_in_project': role,
                         'added_at': datetime.now(timezone.utc),
                     }
                     for uid in to_add
@@ -114,14 +136,32 @@ class ProjectRepository:
         await self.session.flush()
         if to_remove or to_add:
             # Связь меняется core-запросами, ORM об этом не знает.
-            self.session.expire(project, ['owners'])
+            self.session.expire(project, ['owners', 'members'])
 
-    async def get_owned_project_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
-        """Проекты, где пользователь назначен ответственным."""
+    async def set_owners(self, project: Project, user_ids: list[uuid.UUID]) -> None:
+        await self.set_participants(project, user_ids, ProjectRole.OWNER)
+
+    async def set_members(self, project: Project, user_ids: list[uuid.UUID]) -> None:
+        await self.set_participants(project, user_ids, ProjectRole.MEMBER)
+
+    async def get_project_ids_by_role(
+        self, user_id: uuid.UUID, role: ProjectRole
+    ) -> list[uuid.UUID]:
         result = await self.session.execute(
-            select(project_members.c.project_id).where(project_members.c.user_id == user_id)
+            select(project_members.c.project_id).where(
+                project_members.c.user_id == user_id,
+                project_members.c.role_in_project == role,
+            )
         )
         return list(result.scalars().all())
+
+    async def get_owned_project_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """Проекты, за которые пользователь отвечает как постановщик."""
+        return await self.get_project_ids_by_role(user_id, ProjectRole.OWNER)
+
+    async def get_member_project_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """Проекты, где пользователь — ответственный исполнитель."""
+        return await self.get_project_ids_by_role(user_id, ProjectRole.MEMBER)
 
     async def get_project_ids_with_assignments(self, user_id: uuid.UUID) -> list[uuid.UUID]:
         """Проекты, где у пользователя есть хотя бы одна назначенная задача."""

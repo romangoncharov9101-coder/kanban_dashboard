@@ -40,6 +40,27 @@ class ColumnRepository:
         )
         return set(result.scalars().all())
 
+    async def get_column_ids_with_user_cards(
+        self, column_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> set[uuid.UUID]:
+        """
+        Из переданных категорий — те, где у пользователя есть задача:
+        назначенная ему либо созданная им самим. По ним определяется,
+        в каких категориях чужого проекта человек реально работает.
+        """
+        if not column_ids:
+            return set()
+        assigned = (
+            select(Card.column_id)
+            .join(card_assignees, card_assignees.c.card_id == Card.id)
+            .where(Card.column_id.in_(column_ids), card_assignees.c.user_id == user_id)
+        )
+        authored = select(Card.column_id).where(
+            Card.column_id.in_(column_ids), Card.created_by == user_id
+        )
+        result = await self.session.execute(assigned.union(authored))
+        return set(result.scalars().all())
+
     async def get_by_id(self, column_id: uuid.UUID) -> Column | None:
         result = await self.session.execute(
             select(Column).where(Column.id == column_id)

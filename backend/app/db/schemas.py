@@ -270,6 +270,7 @@ class CardHistoryOut(BaseModel):
 #======================================================
 class ProjectRole(str, Enum):
     OWNER = "OWNER"
+    MEMBER = "MEMBER"
 
 
 class ProjectCreate(BaseModel):
@@ -278,6 +279,8 @@ class ProjectCreate(BaseModel):
     # None -> корневой проект; иначе подпроект указанного корня
     parent_id: UUID | None = None
     owner_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    # Ответственные исполнители проекта
+    member_ids: list[UUID] = Field(default_factory=list, max_length=50)
 
     @field_validator('name')
     @classmethod
@@ -297,6 +300,7 @@ class ProjectUpdate(BaseModel):
     position: int | None = Field(None, ge=0)
     is_archived: bool | None = None
     owner_ids: list[UUID] | None = Field(None, max_length=20)
+    member_ids: list[UUID] | None = Field(None, max_length=50)
 
 
 class ProjectOut(BaseModel):
@@ -307,6 +311,7 @@ class ProjectOut(BaseModel):
     position: int
     is_archived: bool
     owners: list[UserShortOut] = []
+    members: list[UserShortOut] = []
     children: list['ProjectOut'] = []
     # Заполняется сервисом под конкретного зрителя
     can_manage: bool = False
@@ -324,8 +329,10 @@ ProjectOut.model_rebuild()
 class ColumnCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     project_id: UUID
-    is_user_movable: bool = False
-    is_user_creatable: bool = False
+    # Открыто по умолчанию: ответственные работают со всеми категориями,
+    # админ ограничивает точечно
+    is_user_movable: bool = True
+    is_user_creatable: bool = True
 
     @field_validator('name')
     @classmethod
