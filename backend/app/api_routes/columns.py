@@ -16,7 +16,7 @@ async def list_columns(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await ColumnService(db).get_all(project_id)
+    return await ColumnService(db).get_all(project_id, viewer=current_user)
 
 
 @router.post('', response_model=ColumnOut, status_code=status.HTTP_201_CREATED)

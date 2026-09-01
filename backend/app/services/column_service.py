@@ -5,7 +5,7 @@ from app.db.models import User
 from app.repositories.column_repo import ColumnRepository
 from app.repositories.event_repo import EventRepository
 from app.repositories.project_repo import ProjectRepository
-from app.db.models import EventType
+from app.db.models import EventType, UserRole
 from app.db.schemas import ColumnCreate, ColumnUpdate, ColumnOut
 from app.manager import manager
 from app.core.logging import get_logger
@@ -22,9 +22,49 @@ class ColumnService:
         self.event_repo = EventRepository(session)
         self.project_repo = ProjectRepository(session)
 
-    async def get_all(self, project_id=None) -> list[ColumnOut]:
+    async def get_all(self, project_id=None, viewer: User | None = None) -> list[ColumnOut]:
         cols = await self.repo.get_all(project_id)
+        cols = await self._visible_for(cols, viewer)
         return [ColumnOut.model_validate(c) for c in cols]
+
+    async def _visible_for(self, cols: list, viewer: User | None) -> list:
+        """
+        Личная категория (is_user_creatable) не показывается обычному
+        исполнителю, пока в ней нет задачи, назначенной именно ему —
+        такую категорию сначала должен «открыть» постановщик или админ,
+        поставив туда первую задачу. Админу и постановщику проекта
+        категории видны все, как и раньше.
+        """
+        if viewer is None or viewer.role is UserRole.ADMIN:
+            return cols
+
+        from app.services.project_service import ProjectService
+        project_service = ProjectService(self.session)
+
+        personal_ids = [c.id for c in cols if c.is_user_creatable]
+        if not personal_ids:
+            return cols
+
+        # Постановщику/владельцу проекта личные категории видны всегда —
+        # ограничение касается только рядовых исполнителей.
+        by_project: dict = {}
+        for c in cols:
+            by_project.setdefault(c.project_id, []).append(c)
+
+        unlocked: set = set()
+        for project_id, project_cols in by_project.items():
+            proj_personal_ids = [c.id for c in project_cols if c.is_user_creatable]
+            if not proj_personal_ids:
+                continue
+            project = await project_service.repo.get_by_id(project_id)
+            if project and await project_service.can_manage_project(project, viewer):
+                unlocked.update(proj_personal_ids)
+
+        remaining = [cid for cid in personal_ids if cid not in unlocked]
+        if remaining:
+            unlocked.update(await self.repo.get_creatable_ids_with_assignment(remaining, viewer.user_id))
+
+        return [c for c in cols if not c.is_user_creatable or c.id in unlocked]
 
     async def get_for_projects(self, project_ids: list) -> list[ColumnOut]:
         cols = await self.repo.get_for_projects(project_ids)
@@ -42,6 +82,7 @@ class ColumnService:
             position=max_pos + 1,
             project_id=data.project_id,
             is_user_movable=data.is_user_movable,
+            is_user_creatable=data.is_user_creatable,
         )
         out = ColumnOut.model_validate(col)
         payload = out.model_dump(mode='json')
@@ -80,6 +121,16 @@ class ColumnService:
         if data.is_user_movable is not None and data.is_user_movable != col.is_user_movable:
             updates['is_user_movable'] = data.is_user_movable
 
+        if data.is_user_creatable is not None and data.is_user_creatable != col.is_user_creatable:
+            # Личные задачи не видны постановщику проекта, поэтому
+            # открывать эту дверь может только администратор.
+            if actor.role is not UserRole.ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail='Разрешать личные задачи в категории может только администратор.',
+                )
+            updates['is_user_creatable'] = data.is_user_creatable
+
         if data.position is not None and data.position != col.position:
             old_pos = col.position
             all_cols = await self.repo.get_all(col.project_id)
@@ -111,8 +162,11 @@ class ColumnService:
         if 'name' in updates:
             changes.append(f'переименовал в «{updates["name"]}»')
         if 'is_user_movable' in updates:
-            changes.append('открыл для исполнителей' if updates['is_user_movable']
-                           else 'закрыл для исполнителей')
+            changes.append('открыл для переноса исполнителями' if updates['is_user_movable']
+                           else 'закрыл перенос исполнителями')
+        if 'is_user_creatable' in updates:
+            changes.append('разрешил личные задачи исполнителей' if updates['is_user_creatable']
+                           else 'запретил личные задачи исполнителей')
         if 'position' in updates:
             changes.append('изменил порядок')
 

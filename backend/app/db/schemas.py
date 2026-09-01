@@ -53,6 +53,7 @@ class EventType(str, Enum):
     CARD_EDITED = "CARD_EDITED"
     CARD_MOVED = "CARD_MOVED"
     CARD_ASSIGNED = "CARD_ASSIGNED"
+    CARD_STATUS_CHANGED = "CARD_STATUS_CHANGED"
     CARD_ARCHIVED = "CARD_ARCHIVED"
     CARD_RESTORED = "CARD_RESTORED"
     CARD_DELETED = "CARD_DELETED"
@@ -133,6 +134,14 @@ class CardPriority(str, Enum):
     LOW = "LOW"
 
 
+class CardStatus(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    REVIEW = "REVIEW"
+    REWORK = "REWORK"
+    DONE = "DONE"
+
+
 class CardCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
@@ -140,6 +149,7 @@ class CardCreate(BaseModel):
     assignee_ids: list[UUID] = Field(default_factory=list, max_length=20)
     deadline: datetime | None = None
     priority: CardPriority = CardPriority.LOW
+    status: CardStatus = CardStatus.NOT_STARTED
 
     @field_validator('title')
     @classmethod
@@ -181,6 +191,7 @@ class CardUpdate(BaseModel):
     assignee_ids: list[UUID] | None = Field(None, max_length=20)
     deadline: datetime | None = None
     priority: CardPriority | None = None
+    status: CardStatus | None = None
     is_archived: bool | None = None
 
     @field_validator('assignee_ids')
@@ -205,6 +216,11 @@ class CardUpdate(BaseModel):
         return v
 
 
+class CardStatusUpdate(BaseModel):
+    """Смена стадии работы. Доступна и исполнителю задачи."""
+    status: CardStatus
+
+
 class CardMoveRequest(BaseModel):
     target_column_id: UUID
     target_position: int = Field(..., ge=0)
@@ -219,6 +235,7 @@ class CardOut(BaseModel):
     created_by: UUID
     position: int
     priority: CardPriority
+    status: CardStatus = CardStatus.NOT_STARTED
     is_archived: bool
 
     created_at: datetime
@@ -232,8 +249,8 @@ class CardOut(BaseModel):
     @field_validator('attachments')
     @classmethod
     def check_attachments_limit(cls, v: list[AttachmentOut]):
-        if len(v) > 20:
-            return v[:20]
+        if len(v) > 5:
+            return v[:5]
         return v
 
     model_config = {'from_attributes': True}
@@ -308,6 +325,7 @@ class ColumnCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     project_id: UUID
     is_user_movable: bool = False
+    is_user_creatable: bool = False
 
     @field_validator('name')
     @classmethod
@@ -325,6 +343,7 @@ class ColumnUpdate(BaseModel):
 
     position: int | None = Field(None, ge=0)
     is_user_movable: bool | None = None
+    is_user_creatable: bool | None = None
 
 
 class ColumnOut(BaseModel):
@@ -333,6 +352,7 @@ class ColumnOut(BaseModel):
     position: int
     project_id: UUID
     is_user_movable: bool
+    is_user_creatable: bool = False
 
     model_config = {'from_attributes': True}
 

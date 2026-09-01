@@ -3,7 +3,7 @@ from fastapi import APIRouter, Body, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.card_service import CardService
-from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardOut, AttachmentOut, CommentOut, CommentCreate
+from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardStatusUpdate, CardOut, AttachmentOut, CommentOut, CommentCreate
 from app.core.deps import get_current_user, require_manager
 from app.db.models import User
 
@@ -26,7 +26,8 @@ async def list_cards(
 
 
 @router.post('', response_model=CardOut, status_code=status.HTTP_201_CREATED)
-async def created_card(body: CardCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(require_manager)):
+async def created_card(body: CardCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Право проверяется по проекту и флагу категории внутри сервиса."""
     return await CardService(db).create(body, current_user)
 
 
@@ -39,6 +40,12 @@ async def update_card(card_id: uuid.UUID, body: CardUpdate, db: AsyncSession = D
 @router.delete('/{card_id}', status_code=status.HTTP_204_NO_CONTENT)
 async def delete_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await CardService(db).delete(card_id, current_user)
+
+
+@router.patch('/{card_id}/status', response_model=CardOut)
+async def change_card_status(card_id: uuid.UUID, body: CardStatusUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Стадию работы меняет исполнитель задачи, её автор или админ."""
+    return await CardService(db).change_status(card_id, body, current_user)
 
 
 @router.post('/{card_id}/move', response_model=CardOut)

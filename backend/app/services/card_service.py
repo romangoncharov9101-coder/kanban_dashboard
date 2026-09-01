@@ -8,9 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import Attachment, Card, User, UserRole
+from app.db.models import Attachment, Card, CardStatus, User, UserRole
 from app.db.schemas import (
-    CardCreate, CardMoveRequest, CardOut, CardUpdate, CommentOut, EventType,
+    CardCreate, CardMoveRequest, CardOut, CardStatusUpdate, CardUpdate,
+    CommentOut, EventType,
 )
 from app.manager import manager
 from app.repositories.card_repo import CardRepository
@@ -53,16 +54,19 @@ class CardService:
     @staticmethod
     def _can_view(card: Card, user: User) -> bool:
         """
-        ADMIN     — видит всё.
-        TEAM_LEAD — свои созданные плюс те, где он сам исполнитель.
-                    Чужие задачи (в том числе созданные админом) не видит.
-        USER      — только назначенные ему.
+        ADMIN — видит всё.
+        Остальные — задачи, где они исполнители, плюс созданные ими самими.
+
+        Личная задача исполнителя (заведённая им в разрешённой категории)
+        подпадает под это правило автоматически: постановщик проекта не
+        является ни её автором, ни исполнителем, поэтому не видит её —
+        ровно как и задумано. Видят автор, назначенные и админ.
         """
         if user.role is UserRole.ADMIN:
             return True
         if card.is_assignee(user.user_id):
             return True
-        return user.role is UserRole.TEAM_LEAD and str(card.created_by) == str(user.user_id)
+        return str(card.created_by) == str(user.user_id)
 
     @staticmethod
     def _can_manage(card: Card, user: User) -> bool:
@@ -70,8 +74,25 @@ class CardService:
         Право менять саму задачу: заголовок, описание, дедлайн,
         приоритет, состав исполнителей, архивацию и удаление.
         Принадлежит админу и автору задачи. Быть исполнителем — мало.
+
+        Исполнитель, заведший личную задачу, ею и распоряжается:
+        может дописать условие и добавить к себе коллег.
         """
         if user.role is UserRole.ADMIN:
+            return True
+        return str(card.created_by) == str(user.user_id)
+
+    @staticmethod
+    def _can_change_status(card: Card, user: User) -> bool:
+        """
+        Стадию работы двигает тот, кто над задачей работает:
+        админ, автор задачи и любой её исполнитель.
+        Это шире, чем право менять саму задачу: исполнителю нужно
+        отмечать прогресс, но не переписывать условие.
+        """
+        if user.role is UserRole.ADMIN:
+            return True
+        if card.is_assignee(user.user_id):
             return True
         return user.role is UserRole.TEAM_LEAD and str(card.created_by) == str(user.user_id)
 
@@ -166,6 +187,21 @@ class CardService:
             if not delivered:
                 await self.notif_repo.ensure_notification_exists(uid, card.id)
 
+    STATUS_LABELS = {
+        CardStatus.NOT_STARTED: 'не начата',
+        CardStatus.IN_PROGRESS: 'взята в работу',
+        CardStatus.REVIEW: 'проверка',
+        CardStatus.REWORK: 'доработка',
+        CardStatus.DONE: 'готово',
+    }
+
+    @classmethod
+    def _status_label(cls, value) -> str:
+        try:
+            return cls.STATUS_LABELS[CardStatus(value)]
+        except (ValueError, KeyError):
+            return str(value)
+
     #======================================================
     # Cards
     #======================================================
@@ -183,7 +219,9 @@ class CardService:
             column_id=column_id,
             assigned_to=assigned_to,
             visible_for=visible_for,
-            include_own_created=viewer.role is UserRole.TEAM_LEAD,
+            # Созданное собой видит любая роль: у постановщика это его
+            # задачи, у исполнителя — личные, заведённые им самим.
+            include_own_created=True,
             project_ids=project_ids,
         )
         return [CardOut.model_validate(c) for c in cards]
@@ -203,9 +241,28 @@ class CardService:
         # Проект берём из колонки, а не из тела запроса: так карточка
         # физически не может оказаться в чужом проекте.
         from app.services.project_service import ProjectService
-        await ProjectService(self.session).assert_can_manage(col.project_id, author)
+        project_service = ProjectService(self.session)
 
-        assignees = await self._resolve_assignees(data.assignee_ids)
+        if author.role is UserRole.ADMIN or await project_service.can_manage_project(
+            await project_service.assert_can_view(col.project_id, author), author
+        ):
+            pass  # админ и ответственный за проект заводят задачи как обычно
+        elif col.is_user_creatable:
+            # Личная задача исполнителя в разрешённой категории
+            pass
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='В этой категории вы не можете создавать задачи.',
+            )
+
+        requested_ids = list(data.assignee_ids)
+        # Автор личной задачи всегда её исполнитель — иначе он потеряет
+        # собственную задачу из виду и не сможет менять её статус.
+        if not author.is_manager and author.user_id not in requested_ids:
+            requested_ids.insert(0, author.user_id)
+
+        assignees = await self._resolve_assignees(requested_ids)
 
         max_pos = await self.repo.get_max_position_in_column(data.column_id)
         card = await self.repo.create(
@@ -218,6 +275,7 @@ class CardService:
             priority=data.priority,
             assignees=assignees,
             project_id=col.project_id,
+            status=data.status,
         )
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
@@ -281,6 +339,10 @@ class CardService:
             updates['deadline'] = data.deadline
             date_str = data.deadline.strftime('%d.%m.%Y') if data.deadline else 'снят'
             log_details.append(f'дедлайн: {date_str}')
+
+        if 'status' in sent_fields and data.status is not None and data.status != card.status:
+            updates['status'] = data.status
+            log_details.append(f'статус → {self._status_label(data.status)}')
 
         if 'priority' in sent_fields and data.priority is not None and data.priority != card.priority:
             updates['priority'] = data.priority
@@ -545,6 +607,43 @@ class CardService:
         logger.info(f'Card moved: {card_id} -> column {data.target_column_id} pos {card.position}')
         return out
 
+    async def change_status(self, card_id: uuid.UUID, data: CardStatusUpdate, actor: User) -> CardOut:
+        """Смена стадии работы — отдельно от общего редактирования задачи."""
+        card = await self.repo.get_by_id(card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
+
+        self._assert_can_view(card, actor)
+        if not self._can_change_status(card, actor):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Менять статус может исполнитель задачи, её автор или администратор.',
+            )
+
+        if card.status == data.status:
+            return CardOut.model_validate(card)
+
+        old_label = self._status_label(card.status)
+        new_label = self._status_label(data.status)
+
+        card = await self.repo.update(card, status=data.status)
+        out = CardOut.model_validate(card)
+        payload = out.model_dump(mode='json')
+
+        await self.event_repo.create(
+            event_type=EventType.CARD_STATUS_CHANGED,
+            message=f'Задача «{card.title}»: статус «{old_label}» → «{new_label}»',
+            card_id=card.id,
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card)),
+        )
+
+        await manager.publish('card_updated', str(card.id), payload, audience=self._audience(card))
+        await self.session.commit()
+        logger.info(f'Card {card_id} status: {old_label} -> {new_label} by {actor.username}')
+        return out
+
     async def archive(self, card_id: uuid.UUID, actor: User) -> CardOut:
         card = await self.repo.get_by_id(card_id)
         if not card:
@@ -644,8 +743,8 @@ class CardService:
         self._assert_can_edit_attachments(card, actor)
 
         count = await self.repo.get_attachment_count(card_id)
-        if count >= 20:
-            raise HTTPException(status_code=400, detail="Максимум 20 файлов на карточку.")
+        if count >= 5:
+            raise HTTPException(status_code=400, detail="Максимум 5 файлов на карточку.")
 
         MAX_SIZE = 5 * 1024 * 1024
         file_content = await file.read()

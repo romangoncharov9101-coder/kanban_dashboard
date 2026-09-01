@@ -49,9 +49,16 @@ class ProjectService:
             # Ответственный за корневой проект отвечает и за его подпроекты.
             for pid in list(owned):
                 ids.update(await self.repo.get_children_ids(pid))
-            ids.update(await self.repo.get_project_ids_with_authored_cards(viewer.user_id))
-
         ids.update(await self.repo.get_project_ids_with_assignments(viewer.user_id))
+        ids.update(await self.repo.get_project_ids_with_authored_cards(viewer.user_id))
+
+        # Личная категория сама по себе видимость не даёт: пока в ней нет
+        # задачи, назначенной именно этому исполнителю, ни она, ни проект
+        # ради неё одной не показываются. Первую задачу туда заводит
+        # постановщик или админ — после этого проект и колонка появятся
+        # у исполнителя сами (см. также фильтр колонок в ColumnService).
+        if viewer.role is UserRole.USER:
+            ids.update(await self.repo.get_project_ids_with_own_creatable_assignment(viewer.user_id))
 
         # Подпроект показываем вместе с его родителем, иначе в дереве
         # появится висящая ветка без корня.

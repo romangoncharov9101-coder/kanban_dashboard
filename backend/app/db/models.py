@@ -94,7 +94,29 @@ class Column(Base):
         Boolean, nullable=False, default=False, server_default='false'
     )
 
+    # Разрешено ли исполнителю заводить в этой категории собственные задачи.
+    # Такие задачи видит только их автор, назначенные исполнители и админ —
+    # постановщик проекта их не видит. Поэтому флаг ставит только админ.
+    is_user_creatable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default='false'
+    )
+
     cards: Mapped[list['Card']] = relationship('Card', back_populates='column', lazy='select')
+
+
+class CardStatus(str, enum.Enum):
+    """
+    Стадия работы над задачей.
+
+    Отличается от категории (колонки): колонки придумывает постановщик
+    под свой процесс, а статус — общий для всей системы, поэтому по нему
+    можно фильтровать и считать сводку одинаково во всех проектах.
+    """
+    NOT_STARTED = "NOT_STARTED"   # не начата
+    IN_PROGRESS = "IN_PROGRESS"   # взята в работу
+    REVIEW = "REVIEW"             # проверка
+    REWORK = "REWORK"             # доработка
+    DONE = "DONE"                 # готово
 
 
 class CardPriority(str, enum.Enum):
@@ -128,6 +150,13 @@ class Card(Base):
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attachments: Mapped[list['Attachment']] = relationship('Attachment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
     priority: Mapped[CardPriority] = mapped_column(postgresql.ENUM(CardPriority, name="cardpriority"), default=CardPriority.LOW, nullable=False, server_default='LOW')
+    status: Mapped[CardStatus] = mapped_column(
+        pgEnum(CardStatus, name='cardstatus'),
+        default=CardStatus.NOT_STARTED,
+        nullable=False,
+        server_default='NOT_STARTED',
+        index=True,
+    )
     comments: Mapped[list['Comment']] = relationship('Comment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)
     # Без delete-orphan: удаление карточки не должно стирать её историю.
     # За обнуление ссылки отвечает ON DELETE SET NULL на стороне БД,
@@ -188,6 +217,7 @@ class EventType(str, enum.Enum):
     CARD_EDITED = "CARD_EDITED"
     CARD_MOVED = "CARD_MOVED"
     CARD_ASSIGNED = "CARD_ASSIGNED"
+    CARD_STATUS_CHANGED = "CARD_STATUS_CHANGED"
     CARD_ARCHIVED = "CARD_ARCHIVED"
     CARD_RESTORED = "CARD_RESTORED"
     CARD_DELETED = "CARD_DELETED"

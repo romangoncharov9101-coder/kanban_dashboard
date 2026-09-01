@@ -53,7 +53,7 @@ async def get_board_init(
     project = await project_service.assert_can_view(project_id, current_user)
     can_manage = await project_service.can_manage_project(project, current_user)
 
-    columns = await column_service.get_all(project.id)
+    columns = await column_service.get_all(project.id, viewer=current_user)
     cards = await card_service.get_all(viewer=current_user, project_ids=[project.id])
 
     sections = []
@@ -67,7 +67,7 @@ async def get_board_init(
             child_cards = await card_service.get_all(viewer=current_user, project_ids=[child.id])
             sections.append({
                 'project': {'id': str(child.id), 'name': child.name},
-                'columns': await column_service.get_all(child.id),
+                'columns': await column_service.get_all(child.id, viewer=current_user),
                 'cards': child_cards,
                 'can_manage': await project_service.can_manage_project(child, current_user),
             })
@@ -122,7 +122,7 @@ async def get_global_board(
                     'name': node.name,
                     'parent_name': root.name if node.parent_id else None,
                 },
-                'columns': await column_service.get_all(node.id),
+                'columns': await column_service.get_all(node.id, viewer=current_user),
                 'cards': await card_service.get_all(viewer=current_user, project_ids=[node.id]),
                 'can_manage': True,
             })

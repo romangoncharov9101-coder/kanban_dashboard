@@ -37,12 +37,11 @@ NEW_EVENT_TYPES = [
 
 def upgrade() -> None:
     # ── Новые типы событий ────────────────────────────────────────────
-    # ALTER TYPE ... ADD VALUE нельзя выполнять внутри транзакции,
-    # поэтому закрываем текущую перед каждым добавлением.
-    conn = op.get_bind()
-    conn.execute(sa.text('COMMIT'))
-    for value in NEW_EVENT_TYPES:
-        conn.execute(sa.text(f"ALTER TYPE eventtype ADD VALUE IF NOT EXISTS '{value}'"))
+    # ALTER TYPE ... ADD VALUE нельзя выполнять внутри стандартной транзакции.
+    # Используем autocommit_block() вместо принудительного COMMIT.
+    with op.get_context().autocommit_block():
+        for value in NEW_EVENT_TYPES:
+            op.execute(sa.text(f"ALTER TYPE eventtype ADD VALUE IF NOT EXISTS '{value}'"))
 
     # ── Денормализованные названия ────────────────────────────────────
     op.add_column('events', sa.Column('actor_username', sa.String(length=100), nullable=True))
@@ -107,5 +106,3 @@ def downgrade() -> None:
     for col in ('target_username', 'column_name', 'project_name',
                 'project_id', 'card_title', 'actor_role', 'actor_username'):
         op.drop_column('events', col)
-
-    # Значения enum в PostgreSQL не удаляются — типы событий остаются.

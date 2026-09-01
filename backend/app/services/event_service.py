@@ -65,6 +65,7 @@ class EventService:
         'CARD_EDITED':        ('Задача изменена', 'card'),
         'CARD_MOVED':         ('Задача перемещена', 'card'),
         'CARD_ASSIGNED':      ('Исполнители изменены', 'card'),
+        'CARD_STATUS_CHANGED':('Статус изменён', 'card'),
         'CARD_ARCHIVED':      ('Задача в архиве', 'card'),
         'CARD_RESTORED':      ('Задача восстановлена', 'card'),
         'CARD_DELETED':       ('Задача удалена', 'card'),

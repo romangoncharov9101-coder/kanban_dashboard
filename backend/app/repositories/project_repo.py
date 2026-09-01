@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Card, Project, ProjectRole, User, UserRole, card_assignees, project_members
+from app.db.models import Card, Column, Project, ProjectRole, User, UserRole, card_assignees, project_members
 
 
 class ProjectRepository:
@@ -137,6 +137,23 @@ class ProjectRepository:
         """Проекты, где пользователь создавал задачи."""
         result = await self.session.execute(
             select(Card.project_id).where(Card.created_by == user_id).distinct()
+        )
+        return list(result.scalars().all())
+
+    async def get_project_ids_with_own_creatable_assignment(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """
+        Проекты, где у пользователя уже есть назначенная задача в личной
+        категории (is_user_creatable). Пока такой задачи нет, ни колонка,
+        ни сам проект (если он не виден по другой причине) исполнителю
+        не показываются — первую задачу туда должен положить постановщик
+        или админ.
+        """
+        result = await self.session.execute(
+            select(Card.project_id)
+            .join(card_assignees, card_assignees.c.card_id == Card.id)
+            .join(Column, Column.id == Card.column_id)
+            .where(card_assignees.c.user_id == user_id, Column.is_user_creatable.is_(True))
+            .distinct()
         )
         return list(result.scalars().all())
 

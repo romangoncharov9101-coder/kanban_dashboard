@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TaskBord</title>
+  <title>HR CRM MVP</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <script defer src="./static/scripts.js?v=1.1.5"></script>
@@ -178,7 +178,7 @@
         </svg>
       </button>
       <h1 class="text-lg font-bold text-indigo-600 flex items-center gap-2">
-        <span>📋</span><span>Tasks Dashboard</span>
+        <span>📋</span><span>HR CRM</span>
       </h1>
     </div>
 
@@ -207,6 +207,12 @@
             <option value="my" title="Двойное нажатие ПРОБЕЛ для быстрого приминения">Мои задачи</option>
             <option value="created">Созданные мной</option>
             <option value="archived" title="Двойное нажатие A для быстрого приминения">Архивированные</option>
+            <option disabled>─── По статусу ───</option>
+            <option value="s-not-started">Не начата</option>
+            <option value="s-in-progress">В работе</option>
+            <option value="s-review">Проверка</option>
+            <option value="s-rework">Доработка</option>
+            <option value="s-done">Готово</option>
             <option disabled>─── По приоритету ───</option>
             <option value="p-high">Высокий</option>
             <option value="p-medium">Средний</option>
@@ -294,6 +300,13 @@
               <option value="my">Мои</option>
               <option value="created">Созданные</option>
               <option value="archived">Архив</option>
+              <option disabled>─── Статус ───</option>
+              <option value="s-not-started">Не начата</option>
+              <option value="s-in-progress">В работе</option>
+              <option value="s-review">Проверка</option>
+              <option value="s-rework">Доработка</option>
+              <option value="s-done">Готово</option>
+              <option disabled>─── Приоритет ───</option>
               <option value="p-high">Высокий</option>
               <option value="p-medium">Средний</option>
               <option value="p-low">Низкий</option>
@@ -450,12 +463,21 @@
       class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
       onkeydown="if(event.key==='Enter') submitAddColumn()" />
 
-    <label class="flex items-start gap-2 mb-4 cursor-pointer select-none">
+    <label class="flex items-start gap-2 mb-3 cursor-pointer select-none">
       <input id="new-col-user-movable" type="checkbox"
         class="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
       <span class="text-xs text-slate-600 leading-snug">
         Разрешить исполнителям переносить сюда свои задачи
-        <span class="block text-[10px] text-slate-400">Если выключено — перетаскивать в эту категорию смогут только админ и тим-лидер</span>
+        <span class="block text-[10px] text-slate-400">Если выключено — перетаскивать в эту категорию смогут только админ и постановщик</span>
+      </span>
+    </label>
+
+    <label id="new-col-creatable-wrap" class="flex items-start gap-2 mb-4 cursor-pointer select-none" style="display:none">
+      <input id="new-col-user-creatable" type="checkbox"
+        class="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400" />
+      <span class="text-xs text-slate-600 leading-snug">
+        Разрешить исполнителям заводить здесь личные задачи
+        <span class="block text-[10px] text-slate-400">Такие задачи видят только автор, назначенные им коллеги и администратор</span>
       </span>
     </label>
     <div class="flex justify-end gap-2">
@@ -496,8 +518,11 @@
       <!-- Description -->
       <div>
         <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Описание</label>
-        <textarea id="card-desc-input" rows="3" maxlength="1000" placeholder="Подробное описание…"
-          class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <div ondblclick="openCardDescModal()">
+          <textarea id="card-desc-input" rows="3" placeholder="Подробное описание… (двойной клик — открыть на весь экран)"
+            style="resize:vertical; min-height:72px; max-height:216px; overflow-y:auto;"
+            class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        </div>
       </div>
  
       <!-- Deadline -->
@@ -526,6 +551,43 @@
       </div>
       <!--Select priority-->
       <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Статус</label>
+        <div id="card-status-group" class="grid grid-cols-5 gap-1.5 mb-4" onchange="onStatusPicked()">
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="NOT_STARTED" class="peer hidden" checked>
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-slate-100 peer-checked:border-slate-400
+                        peer-checked:text-slate-900 transition-all">Не начата</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="IN_PROGRESS" class="peer hidden">
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-blue-50 peer-checked:border-blue-400
+                        peer-checked:text-blue-700 transition-all">В работе</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="REVIEW" class="peer hidden">
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-violet-50 peer-checked:border-violet-400
+                        peer-checked:text-violet-700 transition-all">Проверка</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="REWORK" class="peer hidden">
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-amber-50 peer-checked:border-amber-400
+                        peer-checked:text-amber-700 transition-all">Доработка</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="DONE" class="peer hidden">
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-emerald-50 peer-checked:border-emerald-400
+                        peer-checked:text-emerald-700 transition-all">Готово</div>
+          </label>
+        </div>
+        <p id="card-status-hint" class="text-[10px] text-slate-400 -mt-3 mb-4" style="display:none">
+          Статус сохраняется сразу при выборе
+        </p>
+
         <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Приоритет</label>
         <div class="grid grid-cols-3 gap-2">
           <label class="cursor-pointer">
@@ -744,6 +806,29 @@
         class="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 rounded-lg hover:bg-slate-100">Отмена</button>
       <button onclick="submitCard()"
         class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700 font-medium">Сохранить</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL: Card description — full screen view/edit
+     Открывается двойным кликом по полю описания в карточке.
+════════════════════════════════════════════════════════════════════════ -->
+<dialog id="modal-card-desc">
+  <div class="w-full sm:w-[640px] max-h-[90vh] flex flex-col">
+    <div class="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-100">
+      <h3 class="font-semibold text-slate-800 text-base">Описание</h3>
+      <button onclick="closeCardDescModal()"
+        class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+    </div>
+    <div class="px-6 py-4 flex-1">
+      <textarea id="card-desc-full-input" placeholder="Подробное описание…"
+        oninput="document.getElementById('card-desc-input').value = this.value"
+        class="border border-slate-300 rounded-lg w-full h-full min-h-[50vh] px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+    </div>
+    <div class="flex justify-end gap-2 px-6 pb-5 pt-2">
+      <button onclick="closeCardDescModal()"
+        class="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-indigo-700 font-medium">Готово</button>
     </div>
   </div>
 </dialog>

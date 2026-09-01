@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Column, Card
+from app.db.models import Column, Card, card_assignees
 
 class ColumnRepository:
     def __init__(self, session: AsyncSession):
@@ -22,6 +22,24 @@ class ColumnRepository:
         )
         return list(result.scalars().all())
     
+    async def get_creatable_ids_with_assignment(
+        self, column_ids: list[uuid.UUID], user_id: uuid.UUID
+    ) -> set[uuid.UUID]:
+        """
+        Из переданных личных категорий — те, где у пользователя уже есть
+        назначенная задача. Используется, чтобы скрыть пустую личную
+        категорию от исполнителя, пока в ней нет его задачи.
+        """
+        if not column_ids:
+            return set()
+        result = await self.session.execute(
+            select(Card.column_id)
+            .join(card_assignees, card_assignees.c.card_id == Card.id)
+            .where(Card.column_id.in_(column_ids), card_assignees.c.user_id == user_id)
+            .distinct()
+        )
+        return set(result.scalars().all())
+
     async def get_by_id(self, column_id: uuid.UUID) -> Column | None:
         result = await self.session.execute(
             select(Column).where(Column.id == column_id)
@@ -42,9 +60,11 @@ class ColumnRepository:
         )
         return result.scalar_one()
     
-    async def create(self, name: str, position: int, project_id: uuid.UUID, is_user_movable: bool = False) -> Column:
+    async def create(self, name: str, position: int, project_id: uuid.UUID,
+                     is_user_movable: bool = False, is_user_creatable: bool = False) -> Column:
         col = Column(id=uuid.uuid4(), name=name, position=position,
-                     project_id=project_id, is_user_movable=is_user_movable)
+                     project_id=project_id, is_user_movable=is_user_movable,
+                     is_user_creatable=is_user_creatable)
         self.session.add(col)
         await self.session.flush()
         await self.session.refresh(col)

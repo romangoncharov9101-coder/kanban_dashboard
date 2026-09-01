@@ -27,6 +27,30 @@ let journalSearchTimer = null;
 
 let globalUserFilter = '';   // user_id: показывать только его задачи (вкладка «Все проекты»)
 
+// Стадия работы над задачей. Отличается от категории: колонки свои
+// в каждом проекте, а статус общий для всей системы.
+const STATUS_META = {
+  NOT_STARTED: { label: 'Не начата', short: 'Не начата', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  IN_PROGRESS: { label: 'В работе',  short: 'В работе',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  REVIEW:      { label: 'Проверка',  short: 'Проверка',  cls: 'bg-violet-50 text-violet-700 border-violet-200' },
+  REWORK:      { label: 'Доработка', short: 'Доработка', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  DONE:        { label: 'Готово',    short: 'Готово',    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+};
+
+function _statusMeta(value) {
+  return STATUS_META[value] || STATUS_META.NOT_STARTED;
+}
+
+// Статус двигает тот, кто над задачей работает: админ, автор задачи
+// и любой её исполнитель. Это шире, чем право править саму задачу.
+function canChangeStatus(card) {
+  if (!currentUser || !card) return false;
+  if (isAdmin()) return true;
+  const meId = String(currentUser.user_id);
+  if ((card.assignees || []).some(a => String(a.user_id) === meId)) return true;
+  return currentUser.role === 'TEAM_LEAD' && String(card.created_by) === meId;
+}
+
 function isJournalView() {
   return !!currentProject && String(currentProject.id) === JOURNAL_ID;
 }
@@ -287,6 +311,16 @@ function isForeignBoardCard(card) {
 // Ограничение по разрешённым категориям снимается для автора задачи,
 // админа и ответственного за проект. Тот, кто просто назначен
 // исполнителем, кладёт задачу только в открытые категории.
+// Может ли текущий пользователь завести задачу в этой категории.
+// Админ и ответственный за проект — везде. Исполнитель — только там,
+// где админ разрешил личные задачи.
+function canCreateInColumn(col) {
+  if (!currentUser || !col) return false;
+  if (isAdmin()) return true;
+  if (isManager() && currentProject?.can_manage) return true;
+  return !!col.is_user_creatable;
+}
+
 function canMoveInto(columnId, card) {
   if (!currentUser) return false;
   if (canManageCard(card)) return true;
@@ -777,12 +811,18 @@ function _renderColumn(col, colCards) {
             title="${col.is_user_movable ? 'Исполнители могут переносить сюда задачи. Нажмите, чтобы запретить' : 'Исполнителям запрещено переносить сюда задачи. Нажмите, чтобы разрешить'}">
             ${col.is_user_movable ? '↕' : '—'}
           </button>
+          ${isAdmin() ? `<button onclick="event.stopPropagation(); toggleColumnUserCreate('${col.id}')"
+            data-create-btn
+            class="text-sm ${col.is_user_creatable ? 'text-indigo-500 hover:text-indigo-600' : 'text-slate-400 hover:text-slate-600'}"
+            title="${col.is_user_creatable ? 'Исполнители могут заводить здесь личные задачи. Нажмите, чтобы запретить' : 'Разрешить исполнителям заводить здесь личные задачи'}">
+            ${col.is_user_creatable ? '🔵' : '⚪'}
+          </button>` : ''}
           <button onclick="deleteColumn('${col.id}')"
             class="text-slate-400 hover:text-red-500 text-sm" title="Удалить">✕</button>
         </div>` : ''}
       </div>
       <!-- Add card (скрыто в режиме архива и для исполнителей) -->
-      ${canManage && !isArchived ? `<div class="px-2 pb-2">
+      ${(canManage || canCreateInColumn(col)) && !isArchived ? `<div class="px-2 pb-2">
         <button onclick="openAddCard('${col.id}')"
           class="w-full text-xs text-indigo-600 border border-dashed border-indigo-200
                  rounded-lg px-2 py-1.5 hover:bg-indigo-50 hover:border-indigo-400 transition-colors">
@@ -895,6 +935,7 @@ function _renderCard(c) {
   };
 
   const p = priorityMap[c.priority] || priorityMap['LOW'];
+  const st = _statusMeta(c.status);
  
   return `
     <div class="card bg-white border border-slate-200 rounded-xl text-sm flex flex-col
@@ -910,9 +951,14 @@ function _renderCard(c) {
       <div class="pl-4 pr-3 pt-2.5 pb-2 flex flex-col gap-1.5"> 
         <div class="flex items-start justify-between gap-1">
           <div class="flex flex-col gap-1 flex-1">
-            <span class="inline-block w-fit px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${p.bg} ${p.textColor}">
-              ${p.text}
-            </span>
+            <div class="flex flex-wrap items-center gap-1">
+              <span class="inline-block w-fit px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${p.bg} ${p.textColor}">
+                ${p.text}
+              </span>
+              <span class="inline-block w-fit px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${st.cls}">
+                ${st.short}
+              </span>
+            </div>
             <span class="font-semibold text-slate-800 text-[13px] leading-tight line-clamp-2"
                   title="${esc(c.title)}">${esc(c.title)}</span>
           </div>
@@ -1431,6 +1477,19 @@ function getCardFilter() {
         return card.priority === 'MEDIUM';
       case 'p-low':
         return card.priority === 'LOW';
+
+      // Стадия работы. Значение по умолчанию подставляем на случай
+      // карточек, пришедших из кеша до появления статуса.
+      case 's-not-started':
+        return (card.status || 'NOT_STARTED') === 'NOT_STARTED';
+      case 's-in-progress':
+        return card.status === 'IN_PROGRESS';
+      case 's-review':
+        return card.status === 'REVIEW';
+      case 's-rework':
+        return card.status === 'REWORK';
+      case 's-done':
+        return card.status === 'DONE';
     }
 
     return true;
@@ -1785,9 +1844,30 @@ async function submitAddColumn() {
     name,
     project_id: currentProject?.id,
     is_user_movable: isUserMovable,
+    // Флаг личных задач доступен только админу; для остальных ролей
+    // чекбокс скрыт, и сюда всегда уйдёт false.
+    is_user_creatable: isAdmin() && !!document.getElementById('new-col-user-creatable')?.checked,
   });
   if (!result) return;
   document.getElementById('modal-add-column').close();
+}
+
+// Переключает разрешение исполнителям заводить личные задачи.
+// Доступно только админу: такие задачи скрыты от постановщика проекта.
+async function toggleColumnUserCreate(colId) {
+  if (!isAdmin()) return toast.warn('Это может настраивать только администратор');
+  const col = columns.find(c => String(c.id) === String(colId));
+  if (!col) return;
+  const next = !col.is_user_creatable;
+
+  const result = await api('PUT', `/columns/${colId}`, { is_user_creatable: next });
+  if (!result) return;
+
+  col.is_user_creatable = next;
+  renderBoard();
+  toast.success(next
+    ? `Исполнители могут заводить личные задачи в «${col.name}»`
+    : `Личные задачи в «${col.name}» запрещены`);
 }
 
 // Переключает разрешение для исполнителей переносить задачи в категорию.
@@ -1822,6 +1902,20 @@ function _updateLockIcon(colId, isMovable) {
     ? 'Исполнители могут переносить сюда задачи. Нажмите, чтобы запретить'
     : 'Исполнителям запрещено переносить сюда задачи. Нажмите, чтобы разрешить';
   btn.className = `text-sm ${isMovable ? 'text-emerald-500 hover:text-emerald-600' : 'text-slate-300 hover:text-slate-500'}`;
+}
+
+function _updateCreateIcon(colId, isCreatable) {
+  const colEl = document.querySelector(`[data-column-id="${colId}"]`);
+  if (!colEl) return;
+  const btn = colEl.querySelector('[data-create-btn]');
+  if (!btn) return;
+  
+  // Активное состояние — синий круг (🔵), неактивное — серый (⚪)
+  btn.textContent = isCreatable ? '🔵' : '⚪';
+  btn.title = isCreatable
+    ? 'Исполнители могут заводить здесь личные задачи. Нажмите, чтобы запретить'
+    : 'Разрешить исполнителям заводить здесь личные задачи';
+  btn.className = `text-sm ${isCreatable ? 'text-indigo-500 hover:text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`;
 }
  
 async function deleteColumn(id) {
@@ -1977,6 +2071,55 @@ function _renderAssigneeChips() {
 //   ro=false, commentOnly=false — полное редактирование (автор задачи или админ)
 //   ro=false, commentOnly=true  — только комментарии (назначен исполнителем)
 //   ro=true                     — только просмотр (архив)
+function _setStatusRadio(value) {
+  const target = value || 'NOT_STARTED';
+  document.querySelectorAll('input[name="card-status"]').forEach(r => {
+    r.checked = r.value === target;
+  });
+}
+
+function _getStatusRadio() {
+  const checked = document.querySelector('input[name="card-status"]:checked');
+  return checked ? checked.value : 'NOT_STARTED';
+}
+
+// Статус живёт по своим правилам: его меняет и исполнитель, который
+// саму задачу править не может. Поэтому в режиме «только комментарии»
+// блок статуса остаётся активным, а значение уходит отдельным запросом.
+async function onStatusPicked() {
+  const cardId = document.getElementById('card-edit-id').value;
+  if (!cardId) return;                  // новая задача — уйдёт вместе с формой
+
+  const card = findCardById(cardId);
+  if (!canChangeStatus(card)) return;
+  if (!cardModalCommentOnly) return;    // в полном режиме сохранится по «Сохранить»
+
+  const picked = _getStatusRadio();
+  const result = await api('PATCH', `/cards/${cardId}/status`, { status: picked });
+  if (!result) {
+    _setStatusRadio(card ? card.status : 'NOT_STARTED');   // откат
+    return;
+  }
+  if (card) card.status = result.status;
+  toast.success(`Статус: ${_statusMeta(result.status).label}`);
+}
+
+function openCardDescModal() {
+  const small = document.getElementById('card-desc-input');
+  const full = document.getElementById('card-desc-full-input');
+  full.value = small.value;
+  full.disabled = small.disabled;
+  document.getElementById('modal-card-desc').showModal();
+  if (!full.disabled) full.focus();
+}
+
+function closeCardDescModal() {
+  // На случай, если браузер не успел прогнать oninput перед закрытием.
+  const full = document.getElementById('card-desc-full-input');
+  document.getElementById('card-desc-input').value = full.value;
+  document.getElementById('modal-card-desc').close();
+}
+
 function _applyCardModalMode(opts = {}) {
   const ro = cardModalReadOnly;
   const commentOnly = !ro && cardModalCommentOnly;
@@ -1991,6 +2134,17 @@ function _applyCardModalMode(opts = {}) {
   document.querySelectorAll('input[name="card-priority"]').forEach(r => {
     r.disabled = ro || commentOnly;
   });
+
+  // Статус доступен шире остальных полей: автору, админу и исполнителям
+  const statusAllowed = !ro && opts.canChangeStatus !== false;
+  document.querySelectorAll('input[name="card-status"]').forEach(r => {
+    r.disabled = !statusAllowed;
+  });
+  const statusGroup = document.getElementById('card-status-group');
+  if (statusGroup) statusGroup.classList.toggle('opacity-50', !statusAllowed);
+  const statusHint = document.getElementById('card-status-hint');
+  // Подсказка нужна там, где статус сохраняется отдельно от формы
+  if (statusHint) statusHint.style.display = (statusAllowed && commentOnly) ? '' : 'none';
   document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
     b.style.display = (ro || commentOnly) ? 'none' : '';
   });
@@ -2058,8 +2212,10 @@ function _applyRoleToUI() {
 // CARD ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 async function openAddCard(colId) {
-  if (!isManager()) return toast.warn('Создавать задачи может админ или постановщик');
-  if (!currentProject?.can_manage) return toast.warn('Вы не отвечаете за этот проект');
+  const _col = columns.find(c => String(c.id) === String(colId));
+  if (!canCreateInColumn(_col)) {
+    return toast.warn('В этой категории вы не можете создавать задачи');
+  }
 
   cardModalReadOnly = false;
   cardModalCommentOnly = false;
@@ -2073,6 +2229,16 @@ async function openAddCard(colId) {
   document.getElementById('card-col-id').value = colId;
   document.getElementById('card-title-input').value = '';
   document.getElementById('card-desc-input').value = '';
+  _setStatusRadio('NOT_STARTED');
+
+  // Исполнитель заводит задачу себе: подставляем его сразу, иначе
+  // задача останется ничьей и пропадёт из его выдачи.
+  if (currentUser && !isManager()) {
+    selectedAssignees = [{ user_id: currentUser.user_id, username: currentUser.username }];
+    _renderAssigneeChips();
+    _refreshAssigneeSelect();
+  }
+
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
 
@@ -2117,7 +2283,12 @@ async function openEditCard(cardId) {
   document.getElementById('card-col-id').value = card.column_id;
   document.getElementById('card-title-input').value = card.title;
   document.getElementById('card-desc-input').value = card.description || '';
-  _applyCardModalMode({ hideAttachments: isArchived, hideComments: isArchived });
+  _setStatusRadio(card.status);
+  _applyCardModalMode({
+    hideAttachments: isArchived,
+    hideComments: isArchived,
+    canChangeStatus: canChangeStatus(card),
+  });
 
   const commentField = document.getElementById('card-new-comment');
   if (commentField) commentField.value = '';
@@ -2204,9 +2375,13 @@ async function submitCard() {
       toast.warn('Изменять задачу может только её автор или администратор');
       return;
     }
-  } else if (!isManager()) {
-    toast.warn('Создавать задачи может админ или постановщик');
-    return;
+  } else {
+    const _newColId = document.getElementById('card-col-id').value;
+    const _newCol = columns.find(c => String(c.id) === String(_newColId));
+    if (!canCreateInColumn(_newCol)) {
+      toast.warn('Создавать задачи может админ или постановщик');
+      return;
+    }
   }
 
   const now = Date.now();
@@ -2256,6 +2431,7 @@ async function submitCard() {
     const payload = {
       title,
       description: desc || null,
+      status: _getStatusRadio(),
       assignee_ids: assigneeIds,
       deadline,
       priority,
@@ -2790,10 +2966,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentSortMode = sort || 'position';
       currentFilterMode = filter || 'all';
       
-      const sSelect = document.getElementById('sort-select');
-      const fSelect = document.getElementById('filter-select');
-      if (sSelect) sSelect.value = currentSortMode;
-      if (fSelect) fSelect.value = currentFilterMode;
+      // Обе версии списка — десктопная и мобильная — должны показывать
+      // восстановленное значение, иначе на телефоне будет «Все»,
+      // хотя доска отфильтрована.
+      ['sort-select', 'sort-select-m'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = currentSortMode;
+      });
+      ['filter-select', 'filter-select-m'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = currentFilterMode;
+      });
     } catch (e) {
       console.warn("Ошибка восстановления настроек UI");
     }
@@ -3732,3 +3915,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+(function () {
+  let lockCount = 0;
+
+  function refreshScrollLock() {
+    const anyOpen = !!document.querySelector('dialog[open]');
+    if (anyOpen && lockCount === 0) {
+      lockCount = 1;
+      document.body.style.overflow = 'hidden';
+    } else if (!anyOpen && lockCount !== 0) {
+      lockCount = 0;
+      document.body.style.overflow = '';
+    }
+  }
+
+  function observeDialog(dialog) {
+    new MutationObserver(refreshScrollLock)
+      .observe(dialog, { attributes: true, attributeFilter: ['open'] });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('dialog').forEach(observeDialog);
+    refreshScrollLock();
+  });
+})();
