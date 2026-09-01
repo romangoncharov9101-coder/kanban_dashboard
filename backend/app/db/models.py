@@ -175,9 +175,9 @@ class Card(Base):
 
     creator: Mapped['User'] = relationship('User', foreign_keys=[created_by], lazy='selectin')
 
-    __table_args__ = (
-        CheckConstraint('deadline >= created_at', name='check_deadline_future'),
-    )
+    # Ограничение «дедлайн не раньше создания» снято: задачу заводят
+    # задним числом, а просроченный срок должен сохраняться при правке.
+    # Просрочка — это состояние для показа, а не повод отклонить запись.
 
     def is_assignee(self, user_id: uuid.UUID) -> bool:
         return any(str(u.user_id) == str(user_id) for u in self.assignees)

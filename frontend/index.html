@@ -528,26 +528,70 @@
       <!-- Deadline -->
       <div>
         <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Дедлайн</label>
-        <div class="relative">
-          <input id="card-deadline-input" type="datetime-local"
-            class="border border-slate-300 rounded-lg w-full px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 pr-8" />
-          <!-- Clear button -->
-          <button id="card-deadline-clear" type="button" onclick="clearDeadline()"
-            class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-400 hidden text-base leading-none"
-            title="Очистить дедлайн">×</button>
+
+        <div id="deadline-picker" class="relative">
+          <button type="button" id="deadline-trigger" onclick="toggleDeadlinePicker(event)"
+            class="w-full flex items-center gap-2 border border-slate-300 rounded-lg px-3 py-2
+                   text-sm bg-white text-slate-500 hover:border-indigo-300 hover:bg-slate-50
+                   focus:outline-none focus:ring-2 focus:ring-indigo-400 transition-colors">
+            <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+            <span id="deadline-label" class="flex-1 text-left">Выберите дату и время</span>
+            <button type="button" id="card-deadline-clear" onclick="event.stopPropagation(); clearDeadline()"
+              class="text-slate-400 hover:text-red-500 text-base leading-none hidden flex-shrink-0"
+              title="Очистить дедлайн">&times;</button>
+          </button>
+
+          <!-- Значение для формы; календарь пишет сюда ISO-строку -->
+          <input type="hidden" id="card-deadline-input" />
+
+          <div id="deadline-panel" style="display:none"
+            class="absolute left-0 top-full mt-1 bg-white border border-slate-200 rounded-xl
+                   shadow-xl z-50 flex overflow-hidden w-[420px] max-w-[92vw]">
+
+            <!-- Быстрый выбор -->
+            <div id="deadline-shortcuts"
+              class="w-28 flex-shrink-0 border-r border-slate-100 py-2 flex flex-col"></div>
+
+            <div class="flex-1 p-3">
+              <!-- Навигация по месяцам -->
+              <div class="flex items-center justify-between mb-2">
+                <button type="button" onclick="deadlineShiftMonth(-1)"
+                  class="w-6 h-6 rounded hover:bg-slate-100 text-slate-500 text-sm">‹</button>
+                <span id="deadline-month" class="text-sm font-medium text-slate-700"></span>
+                <button type="button" onclick="deadlineShiftMonth(1)"
+                  class="w-6 h-6 rounded hover:bg-slate-100 text-slate-500 text-sm">›</button>
+              </div>
+
+              <div class="grid grid-cols-7 gap-0.5 mb-1">
+                <span class="text-[10px] text-slate-400 text-center py-1">Пн</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Вт</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Ср</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Чт</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Пт</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Сб</span>
+                <span class="text-[10px] text-slate-400 text-center py-1">Вс</span>
+              </div>
+              <div id="deadline-days" class="grid grid-cols-7 gap-0.5"></div>
+
+              <div class="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100">
+                <input id="deadline-time" type="time" step="60"
+                  class="border border-slate-300 rounded-lg px-2 py-1.5 text-sm w-28
+                         focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                <button type="button" onclick="deadlineSetNow()"
+                  class="text-xs text-slate-500 hover:text-indigo-600 px-2 py-1">Сейчас</button>
+                <button type="button" onclick="confirmDeadline()"
+                  class="ml-auto bg-indigo-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-indigo-700">
+                  Готово
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <p id="deadline-error" class="text-red-500 text-xs mt-1 hidden">Дедлайн должен быть позже текущего времени</p>
-        <!-- Quick presets -->
-        <div class="flex gap-2 mt-1.5 flex-wrap">
-          <button type="button" onclick="setDeadlinePreset(1)"
-            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 день</button>
-          <button type="button" onclick="setDeadlinePreset(3)"
-            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+3 дня</button>
-          <button type="button" onclick="setDeadlinePreset(7)"
-            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 нед</button>
-          <button type="button" onclick="setDeadlinePreset(30)"
-            class="text-xs px-2 py-0.5 bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-700 rounded-full">+1 мес</button>
-        </div>
+
+        <p id="deadline-error" class="text-amber-600 text-xs mt-1 hidden">Срок уже прошёл</p>
       </div>
       <!--Select priority-->
       <div>
@@ -853,7 +897,7 @@
       class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
 
     <div id="project-owners-block">
-      <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Постановщики</label>
+      <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Ответственные</label>
       <div id="project-owner-chips" class="flex flex-wrap gap-1.5 mb-2 empty:hidden"></div>
       <select id="project-owner-select" onchange="addProjectOwner(this.value); this.value=''"
         class="border border-slate-300 rounded-lg w-full px-3 py-2 mb-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">

@@ -1118,41 +1118,213 @@ function _toDatetimeLocal(isoString) {
   return new Date(d - offset).toISOString().slice(0, 16);
 }
 
-function setDeadlinePreset(days) {
-  const d = new Date(Date.now() + days * 86400000);
+// ─────────────────────────────────────────────────────────────────────────────
+// DEADLINE PICKER — календарь с быстрым выбором вместо datetime-local.
+// Системный datetime-local нельзя стилизовать и в нём нет пресетов.
+// ─────────────────────────────────────────────────────────────────────────────
+let _dlValue = null;   // выбранная дата (Date) или null
+let _dlMonth = null;   // месяц, показанный в календаре
+
+const _MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь',
+                 'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+
+// Быстрый выбор: смещение от «сейчас» в днях и время по умолчанию
+const DEADLINE_SHORTCUTS = [
+  { text: 'Сегодня',      days: 0,  hour: 18 },
+  { text: 'Завтра',       days: 1,  hour: 12 },
+  { text: 'Через 3 дня',  days: 3,  hour: 12 },
+  { text: 'Через неделю', days: 7,  hour: 12 },
+  { text: 'Через месяц',  days: 30, hour: 12 },
+];
+
+function _dlShortcutDate(sc) {
+  const d = new Date();
+  d.setDate(d.getDate() + sc.days);
+  d.setHours(sc.hour, 0, 0, 0);
+  return d;
+}
+
+function _dlFormat(d) {
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function _dlSameDay(a, b) {
+  return a && b && a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function toggleDeadlinePicker(e) {
+  if (e) e.stopPropagation();
+  const panel = document.getElementById('deadline-panel');
+  if (!panel) return;
+  panel.style.display !== 'none' ? closeDeadlinePicker() : openDeadlinePicker();
+}
+
+function openDeadlinePicker() {
+  const trigger = document.getElementById('deadline-trigger');
+  if (trigger && trigger.disabled) return;      // режим просмотра
+
+  const panel = document.getElementById('deadline-panel');
+  if (!panel) return;
+
+  _dlMonth = new Date(_dlValue || new Date());
+  _dlMonth.setDate(1);
+  panel.style.display = '';
+  _renderDeadlineShortcuts();
+  _renderDeadlineCalendar();
+
+  const time = document.getElementById('deadline-time');
+  if (time) {
+    const d = _dlValue || new Date();
+    time.value = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+}
+
+function closeDeadlinePicker() {
+  const panel = document.getElementById('deadline-panel');
+  if (panel) panel.style.display = 'none';
+}
+
+function _renderDeadlineShortcuts() {
+  const box = document.getElementById('deadline-shortcuts');
+  if (!box) return;
+  box.innerHTML = DEADLINE_SHORTCUTS.map((sc, i) => `
+    <button type="button" onclick="pickDeadlineShortcut(${i})"
+      class="text-left text-xs text-slate-600 px-3 py-1.5 hover:bg-indigo-50
+             hover:text-indigo-700 transition-colors">${esc(sc.text)}</button>`).join('');
+}
+
+function pickDeadlineShortcut(index) {
+  const sc = DEADLINE_SHORTCUTS[index];
+  if (!sc) return;
+  _dlValue = _dlShortcutDate(sc);
+  _dlMonth = new Date(_dlValue);
+  _dlMonth.setDate(1);
+  _applyDeadlineValue();
+  closeDeadlinePicker();
+}
+
+function _renderDeadlineCalendar() {
+  const box = document.getElementById('deadline-days');
+  const title = document.getElementById('deadline-month');
+  if (!box || !_dlMonth) return;
+
+  title.textContent = `${_MONTHS[_dlMonth.getMonth()]} ${_dlMonth.getFullYear()}`;
+
+  const first = new Date(_dlMonth);
+  // В России неделя начинается с понедельника, а getDay() — с воскресенья
+  const shift = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(_dlMonth.getFullYear(), _dlMonth.getMonth() + 1, 0).getDate();
+  const today = new Date();
+
+  const cells = [];
+  for (let i = 0; i < shift; i++) cells.push('<span></span>');
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(_dlMonth.getFullYear(), _dlMonth.getMonth(), day);
+    const isToday = _dlSameDay(d, today);
+    const isSelected = _dlSameDay(d, _dlValue);
+    const isPast = d < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+    const cls = isSelected
+      ? 'bg-indigo-600 text-white font-semibold'
+      : isToday
+        ? 'text-indigo-600 font-semibold hover:bg-indigo-50'
+        : isPast
+          ? 'text-slate-300 hover:bg-slate-100'   // прошлое доступно, но приглушено
+          : 'text-slate-700 hover:bg-indigo-50';
+
+    cells.push(`<button type="button" onclick="pickDeadlineDay(${day})"
+      class="h-7 rounded text-xs transition-colors ${cls}">${day}</button>`);
+  }
+  box.innerHTML = cells.join('');
+}
+
+function deadlineShiftMonth(delta) {
+  if (!_dlMonth) return;
+  _dlMonth = new Date(_dlMonth.getFullYear(), _dlMonth.getMonth() + delta, 1);
+  _renderDeadlineCalendar();
+}
+
+function pickDeadlineDay(day) {
+  const time = document.getElementById('deadline-time');
+  const [h, m] = (time?.value || '12:00').split(':').map(Number);
+  _dlValue = new Date(_dlMonth.getFullYear(), _dlMonth.getMonth(), day, h || 0, m || 0, 0, 0);
+  _renderDeadlineCalendar();
+  _applyDeadlineValue();
+}
+
+function deadlineSetNow() {
+  _dlValue = new Date();
+  _dlMonth = new Date(_dlValue);
+  _dlMonth.setDate(1);
+  const time = document.getElementById('deadline-time');
+  if (time) {
+    time.value = `${String(_dlValue.getHours()).padStart(2, '0')}:${String(_dlValue.getMinutes()).padStart(2, '0')}`;
+  }
+  _renderDeadlineCalendar();
+  _applyDeadlineValue();
+}
+
+function confirmDeadline() {
+  const time = document.getElementById('deadline-time');
+  if (time && time.value) {
+    const [h, m] = time.value.split(':').map(Number);
+    const base = _dlValue || new Date();
+    _dlValue = new Date(base.getFullYear(), base.getMonth(), base.getDate(), h || 0, m || 0, 0, 0);
+  }
+  _applyDeadlineValue();
+  closeDeadlinePicker();
+}
+
+// Записывает выбранное значение в скрытое поле и обновляет подпись
+function _applyDeadlineValue() {
   const input = document.getElementById('card-deadline-input');
-  input.value = _toDatetimeLocal(d.toISOString());
-  _updateDeadlineClearBtn();
+  const label = document.getElementById('deadline-label');
+  const clearBtn = document.getElementById('card-deadline-clear');
+
+  if (input) input.value = _dlValue ? _dlValue.toISOString() : '';
+  if (label) {
+    label.textContent = _dlValue ? _dlFormat(_dlValue) : 'Выберите дату и время';
+    label.classList.toggle('text-slate-800', !!_dlValue);
+    label.classList.toggle('text-slate-500', !_dlValue);
+  }
+  if (clearBtn) clearBtn.classList.toggle('hidden', !_dlValue);
   _validateDeadline();
 }
 
+// Подставляет значение при открытии карточки
+function setDeadlineValue(iso) {
+  _dlValue = iso ? new Date(iso) : null;
+  if (_dlValue && isNaN(_dlValue)) _dlValue = null;
+  _applyDeadlineValue();
+}
+
 function clearDeadline() {
-  document.getElementById('card-deadline-input').value = '';
-  document.getElementById('card-deadline-clear').classList.add('hidden');
-  document.getElementById('deadline-error').classList.add('hidden');
+  _dlValue = null;
+  _applyDeadlineValue();
+  closeDeadlinePicker();
 }
 
 function _updateDeadlineClearBtn() {
-  const val = document.getElementById('card-deadline-input').value;
-  document.getElementById('card-deadline-clear').classList.toggle('hidden', !val);
+  const clearBtn = document.getElementById('card-deadline-clear');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !_dlValue);
 }
 
+// Просрочка больше не блокирует сохранение: это подсказка, а не ошибка.
+// Иначе просроченную задачу нельзя было бы отредактировать — клиент
+// отправлял обратно истёкший дедлайн и сам себя отклонял.
 function _validateDeadline() {
-  const input = document.getElementById('card-deadline-input');
   const errEl = document.getElementById('deadline-error');
-  if (!input.value) { errEl.classList.add('hidden'); return null; }
- 
-  const selected = new Date(input.value);
-  if (isNaN(selected)) { errEl.classList.add('hidden'); return null; }
- 
-  if (selected <= new Date()) {
-    errEl.classList.remove('hidden');
-    input.classList.add('border-red-400', 'ring-red-300');
-    return false;
+  if (!_dlValue) {
+    if (errEl) errEl.classList.add('hidden');
+    return null;
   }
-  errEl.classList.add('hidden');
-  input.classList.remove('border-red-400', 'ring-red-300');
-  return selected.toISOString();
+  if (errEl) errEl.classList.toggle('hidden', _dlValue > new Date());
+  return _dlValue.toISOString();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2144,7 +2316,7 @@ function _applyCardModalMode(opts = {}) {
   // card-desc-input исключён отсюда: ему нужен readOnly, а не disabled,
   // иначе двойной клик для открытия полного текста перестанет работать —
   // disabled-элементы в браузерах вообще не порождают события мыши.
-  ['card-title-input', 'card-deadline-input']
+  ['card-title-input']
     .forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = ro || commentOnly;
@@ -2166,9 +2338,12 @@ function _applyCardModalMode(opts = {}) {
   const statusHint = document.getElementById('card-status-hint');
   // Подсказка нужна там, где статус сохраняется отдельно от формы
   if (statusHint) statusHint.style.display = (statusAllowed && commentOnly) ? '' : 'none';
-  document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => {
-    b.style.display = (ro || commentOnly) ? 'none' : '';
-  });
+  // Календарь дедлайна открывается только в режиме редактирования
+  const dlTrigger = document.getElementById('deadline-trigger');
+  if (dlTrigger) dlTrigger.disabled = ro || commentOnly;
+  const dlClear = document.getElementById('card-deadline-clear');
+  if (dlClear) dlClear.style.display = (ro || commentOnly) ? 'none' : '';
+  if (ro || commentOnly) closeDeadlinePicker();
 
   // Состав исполнителей меняет только автор или админ
   // Состав исполнителей личной задачи неизменен: автор — единственный
@@ -2332,10 +2507,7 @@ async function openEditCard(cardId) {
   const radioToSelect = document.querySelector(`input[name="card-priority"][value="${priority}"]`);
   if (radioToSelect) radioToSelect.checked = true;
 
-  const dlInput = document.getElementById('card-deadline-input');
-  dlInput.value = card.deadline ? _toDatetimeLocal(card.deadline) : '';
-  _updateDeadlineClearBtn();
-  document.getElementById('deadline-error').classList.add('hidden');
+  setDeadlineValue(card.deadline || null);
   pendingFiles = [];
   pendingDeletions = [];
   _renderAttachmentsList(card.attachments || []);
@@ -2450,15 +2622,9 @@ async function submitCard() {
     if (titleError) return toast.warn(titleError);
 
 
-    const deadlineRaw = document.getElementById('card-deadline-input').value;
-    let deadline = null;
-    if (deadlineRaw) {
-      deadline = _validateDeadline();
-      if (deadline === false) {
-        toast.error('Дедлайн должен быть позже текущего времени');
-        return;
-      }
-    }
+    // Просроченный дедлайн допустим: задачу заводят задним числом,
+    // а у существующей срок мог истечь — это не повод не дать её сохранить.
+    const deadline = document.getElementById('card-deadline-input').value || null;
 
     const priorityElement = document.querySelector('input[name="card-priority"]:checked');
     const priority = priorityElement ? priorityElement.value : 'LOW';
@@ -2897,10 +3063,7 @@ function insertEmoji(emoji) {
 // INIT
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  document.getElementById('card-deadline-input')?.addEventListener('input', () => {
-    _updateDeadlineClearBtn();
-    _validateDeadline();
-  });
+  // Значение дедлайна ставит календарь, отдельный слушатель не нужен
 
   document.addEventListener('paste', (e) => {
     const modal = document.getElementById('modal-card');
@@ -3944,6 +4107,9 @@ document.addEventListener('click', (e) => {
   const ufPicker = document.getElementById('user-filter-picker');
   if (ufPicker && !ufPicker.contains(e.target)) closeUserFilterPicker();
 
+  const dlPicker = document.getElementById('deadline-picker');
+  if (dlPicker && !dlPicker.contains(e.target)) closeDeadlinePicker();
+
   if (e.target.tagName !== 'DIALOG') return;
   const r = e.target.getBoundingClientRect();
   const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
@@ -3987,12 +4153,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (chips) chips.innerHTML = '';
       const assignHint = document.querySelector('#assignees-block p');
       if (assignHint) assignHint.style.display = '';
-      const fields = ['card-title-input','card-deadline-input'];
+      const fields = ['card-title-input'];
       fields.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
       const descEl = document.getElementById('card-desc-input');
       if (descEl) descEl.readOnly = false;
       document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = false; });
-      document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => { b.style.display = ''; });
       const dropZone = document.getElementById('drop-zone');
       if (dropZone) dropZone.style.display = '';
       const commentInput = document.querySelector('#comments-section .relative.group');

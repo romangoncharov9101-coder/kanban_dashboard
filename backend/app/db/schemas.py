@@ -169,12 +169,13 @@ class CardCreate(BaseModel):
     @field_validator('deadline')
     @classmethod
     def validate_deadline(cls, v: datetime | None):
+        # Дата в прошлом допустима: задачу могли завести задним числом
+        # или перенести срок, который уже истёк. Просрочка показывается
+        # на карточке, но не мешает сохранить задачу.
         if v is None:
             return v
         if v.tzinfo is None:
             v = v.replace(tzinfo=timezone.utc)
-        if v < datetime.now(timezone.utc):
-            raise ValueError('Дедлайн не может быть в прошлом')
         return v
 
 
@@ -209,10 +210,13 @@ class CardUpdate(BaseModel):
     @field_validator('deadline')
     @classmethod
     def validate_deadline(cls, v: datetime | None):
-        if v is None: return v
-        if v.tzinfo is None: v = v.replace(tzinfo=timezone.utc)
-        if v < datetime.now(timezone.utc):
-            raise ValueError('Дедлайн не может быть в прошлом')
+        # Просроченную задачу нужно уметь редактировать: раньше любая
+        # правка падала, потому что клиент отправлял обратно уже
+        # истёкший дедлайн и валидатор его отклонял.
+        if v is None:
+            return v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
         return v
 
 
