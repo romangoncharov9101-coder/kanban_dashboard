@@ -210,6 +210,7 @@
             <option disabled>─── По статусу ───</option>
             <option value="s-not-started">Не начата</option>
             <option value="s-in-progress">В работе</option>
+            <option value="s-paused">Пауза</option>
             <option value="s-review">Проверка</option>
             <option value="s-rework">Доработка</option>
             <option value="s-done">Готово</option>
@@ -303,6 +304,7 @@
               <option disabled>─── Статус ───</option>
               <option value="s-not-started">Не начата</option>
               <option value="s-in-progress">В работе</option>
+              <option value="s-paused">Пауза</option>
               <option value="s-review">Проверка</option>
               <option value="s-rework">Доработка</option>
               <option value="s-done">Готово</option>
@@ -596,7 +598,7 @@
       <!--Select priority-->
       <div>
         <label class="block text-xs font-medium text-slate-500 mb-1 uppercase tracking-wide">Статус</label>
-        <div id="card-status-group" class="grid grid-cols-5 gap-1.5 mb-4" onchange="onStatusPicked()">
+        <div id="card-status-group" class="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-4" onchange="onStatusPicked()">
           <label class="cursor-pointer">
             <input type="radio" name="card-status" value="NOT_STARTED" class="peer hidden" checked>
             <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
@@ -608,6 +610,12 @@
             <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
                         text-slate-600 peer-checked:bg-blue-50 peer-checked:border-blue-400
                         peer-checked:text-blue-700 transition-all">В работе</div>
+          </label>
+          <label class="cursor-pointer">
+            <input type="radio" name="card-status" value="PAUSED" class="peer hidden">
+            <div class="text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium
+                        text-slate-600 peer-checked:bg-orange-50 peer-checked:border-orange-400
+                        peer-checked:text-orange-700 transition-all">Пауза</div>
           </label>
           <label class="cursor-pointer">
             <input type="radio" name="card-status" value="REVIEW" class="peer hidden">

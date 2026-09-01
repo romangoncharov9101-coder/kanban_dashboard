@@ -116,6 +116,7 @@ class CardStatus(str, enum.Enum):
     """
     NOT_STARTED = "NOT_STARTED"   # не начата
     IN_PROGRESS = "IN_PROGRESS"   # взята в работу
+    PAUSED = "PAUSED"             # пауза: работа начата, но приостановлена
     REVIEW = "REVIEW"             # проверка
     REWORK = "REWORK"             # доработка
     DONE = "DONE"                 # готово

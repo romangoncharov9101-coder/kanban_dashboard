@@ -34,6 +34,7 @@ let globalUserFilter = '';   // user_id: показывать только ег�
 const STATUS_META = {
   NOT_STARTED: { label: 'Не начата', short: 'Не начата', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
   IN_PROGRESS: { label: 'В работе',  short: 'В работе',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  PAUSED:      { label: 'Пауза',     short: 'Пауза',     cls: 'bg-orange-50 text-orange-700 border-orange-200' },
   REVIEW:      { label: 'Проверка',  short: 'Проверка',  cls: 'bg-violet-50 text-violet-700 border-violet-200' },
   REWORK:      { label: 'Доработка', short: 'Доработка', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
   DONE:        { label: 'Готово',    short: 'Готово',    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -1673,6 +1674,8 @@ function getCardFilter() {
         return (card.status || 'NOT_STARTED') === 'NOT_STARTED';
       case 's-in-progress':
         return card.status === 'IN_PROGRESS';
+      case 's-paused':
+        return card.status === 'PAUSED';
       case 's-review':
         return card.status === 'REVIEW';
       case 's-rework':

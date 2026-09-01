@@ -190,6 +190,7 @@ class CardService:
     STATUS_LABELS = {
         CardStatus.NOT_STARTED: 'не начата',
         CardStatus.IN_PROGRESS: 'взята в работу',
+        CardStatus.PAUSED: 'на паузе',
         CardStatus.REVIEW: 'проверка',
         CardStatus.REWORK: 'доработка',
         CardStatus.DONE: 'готово',
