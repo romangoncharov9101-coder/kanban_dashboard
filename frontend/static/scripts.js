@@ -2108,9 +2108,9 @@ function openCardDescModal() {
   const small = document.getElementById('card-desc-input');
   const full = document.getElementById('card-desc-full-input');
   full.value = small.value;
-  full.disabled = small.disabled;
+  full.readOnly = small.readOnly;
   document.getElementById('modal-card-desc').showModal();
-  if (!full.disabled) full.focus();
+  if (!full.readOnly) full.focus();
 }
 
 function closeCardDescModal() {
@@ -2124,12 +2124,16 @@ function _applyCardModalMode(opts = {}) {
   const ro = cardModalReadOnly;
   const commentOnly = !ro && cardModalCommentOnly;
 
-  // Поля задачи меняет только автор или админ
-  ['card-title-input', 'card-desc-input', 'card-deadline-input']
+  // card-desc-input исключён отсюда: ему нужен readOnly, а не disabled,
+  // иначе двойной клик для открытия полного текста перестанет работать —
+  // disabled-элементы в браузерах вообще не порождают события мыши.
+  ['card-title-input', 'card-deadline-input']
     .forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = ro || commentOnly;
     });
+  const descEl = document.getElementById('card-desc-input');
+  if (descEl) descEl.readOnly = ro || commentOnly;
 
   document.querySelectorAll('input[name="card-priority"]').forEach(r => {
     r.disabled = ro || commentOnly;
@@ -3902,8 +3906,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (chips) chips.innerHTML = '';
       const assignHint = document.querySelector('#assignees-block p');
       if (assignHint) assignHint.style.display = '';
-      const fields = ['card-title-input','card-desc-input','card-deadline-input'];
+      const fields = ['card-title-input','card-deadline-input'];
       fields.forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
+      const descEl = document.getElementById('card-desc-input');
+      if (descEl) descEl.readOnly = false;
       document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = false; });
       document.querySelectorAll('[onclick^="setDeadlinePreset"], [onclick="clearDeadline()"]').forEach(b => { b.style.display = ''; });
       const dropZone = document.getElementById('drop-zone');
