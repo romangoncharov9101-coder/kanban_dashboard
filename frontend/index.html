@@ -199,6 +199,18 @@
 
       <!-- User info + filters -->
       <div id="user-info" class="hidden items-center gap-2 text-sm text-slate-600">
+        <div id="entity-search-box" class="relative">
+          <input id="entity-search-input" type="text" placeholder="Поиск: T42, или название..."
+            autocomplete="off"
+            class="border border-slate-300 rounded-lg pl-7 pr-2 py-1.5 text-xs w-44 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            oninput="onEntitySearchInput(this.value)"
+            onfocus="onEntitySearchInput(this.value)"
+            onkeydown="if(event.key==='Escape'){this.value='';closeEntitySearchResults();}" />
+          <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">🔎</span>
+          <div id="entity-search-results" style="display:none"
+            class="absolute z-50 mt-1 w-80 max-h-96 overflow-y-auto bg-white border border-slate-200
+                   rounded-xl shadow-lg text-left"></div>
+        </div>
         <div class="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-lg border border-slate-200">
           <label for="filter-select" class="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Фильтр:</label>
           <select id="filter-select" onchange="changeFilterMode(this.value)"
@@ -279,6 +291,18 @@
 
       <!-- Блок залогиненного пользователя -->
       <div id="user-info-mobile" class="hidden flex-col gap-3">
+        <div id="entity-search-box-m" class="relative">
+          <input id="entity-search-input-m" type="text" placeholder="Поиск: T42 (задача), C7 (категория) или название..."
+            autocomplete="off"
+            class="w-full border border-slate-300 rounded-lg pl-8 pr-2 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            oninput="onEntitySearchInput(this.value, '-m')"
+            onfocus="onEntitySearchInput(this.value, '-m')"
+            onkeydown="if(event.key==='Escape'){this.value='';closeEntitySearchResults('-m');}" />
+          <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">🔎</span>
+          <div id="entity-search-results-m" style="display:none"
+            class="absolute z-50 mt-1 w-full max-h-80 overflow-y-auto bg-white border border-slate-200
+                   rounded-xl shadow-lg text-left"></div>
+        </div>
         <div class="flex items-center justify-between">
           <span class="font-semibold text-slate-800 flex items-center gap-2">
             <span class="bg-indigo-100 text-indigo-600 w-8 h-8 rounded-full flex items-center justify-center">👤</span>

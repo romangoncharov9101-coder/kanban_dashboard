@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint, Table, and_, Column as SAColumn
+from sqlalchemy import String, ForeignKey, Integer, Boolean, DateTime, JSON, Text, CheckConstraint, Table, and_, Column as SAColumn, Sequence
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import UUID, ENUM as pgEnum
@@ -9,6 +9,13 @@ from app.db.session import Base
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Сквозные номера задач и категорий для быстрого поиска/менеджерирования.
+# Отдельные последовательности на уровне БД: номер выдаётся атомарно на
+# INSERT, без гонок, и не зависит от порядка/удаления других записей.
+card_number_seq = Sequence('card_number_seq', start=1)
+column_number_seq = Sequence('column_number_seq', start=1)
 
 
 class UserRole(str, enum.Enum):
@@ -79,6 +86,14 @@ class Column(Base):
     __tablename__ = 'columns'
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Сквозной порядковый номер колонки (не путать с position — той, что
+    # задаёт порядок отображения). Выдаётся один раз при создании и
+    # больше не меняется, поэтому годится как короткий стабильный
+    # идентификатор для поиска и общения («колонка №7»).
+    number: Mapped[int] = mapped_column(
+        Integer, column_number_seq,
+        server_default=column_number_seq.next_value(), unique=True, nullable=False, index=True,
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -132,6 +147,13 @@ class Card(Base):
     __tablename__ = 'cards'
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Сквозной порядковый номер задачи по всей системе — короткий,
+    # стабильный, не меняется при переносе между колонками/проектами.
+    # Именно по нему быстро ищут и называют задачу («задача №42»).
+    number: Mapped[int] = mapped_column(
+        Integer, card_number_seq,
+        server_default=card_number_seq.next_value(), unique=True, nullable=False, index=True,
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 

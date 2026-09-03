@@ -234,6 +234,37 @@ class CardService:
         self._assert_can_view(card, viewer)
         return CardOut.model_validate(card)
 
+    async def search(self, query: str, viewer: User) -> list[CardOut]:
+        """
+        Быстрый поиск задачи по номеру или по названию.
+
+        Область — всё, что зрителю в принципе видно (та же видимость,
+        что и на доске), без привязки к текущему открытому проекту:
+        номер задачи уникален по всей системе, поэтому искать её нужно
+        сквозь проекты, а не только в рамках одного.
+        """
+        q = (query or '').strip()
+        if not q:
+            return []
+
+        all_cards = await self.get_all(viewer)
+
+        q_lower = q.lower()
+        # Пользователь видит номера с префиксом T (T42), поэтому поиск
+        # должен понимать и его, и голое число.
+        number_part = q_lower[1:] if q_lower.startswith('t') else q_lower
+        by_number = number_part if number_part.isdigit() else None
+
+        matched = [
+            c for c in all_cards
+            if (by_number is not None and str(c.number) == by_number)
+            or q_lower in c.title.lower()
+        ]
+        # Точное совпадение по номеру — самый однозначный запрос,
+        # поэтому ставим его первым.
+        matched.sort(key=lambda c: (by_number is None or str(c.number) != by_number, c.number))
+        return matched[:30]
+
     async def create(self, data: CardCreate, author: User) -> CardOut:
         col = await self.column_repo.get_by_id(data.column_id)
         if not col:

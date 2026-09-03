@@ -26,8 +26,6 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     logger.info('Starting TaskBoard MVP')
 
-    # Администратор создаётся из .env — это единственный способ
-    # завести первый аккаунт, самостоятельной регистрации нет.
     await ensure_admin_exists()
 
     broadcast_task = asyncio.create_task(manager.broadcast_loop())
@@ -95,10 +93,13 @@ frontend_path = os.path.join(root_dir, "frontend")
 print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
 class MyStaticFiles(StaticFiles):
-    def is_not_modified(self, response_headers, request_headers) -> bool:
-        return super().is_not_modified(response_headers, request_headers)
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
-app.mount("/static", StaticFiles(directory=os.path.join(frontend_path, "static"), html=True), name="static")
+
+app.mount("/static", MyStaticFiles(directory=os.path.join(frontend_path, "static"), html=True), name="static")
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads", "attachments")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -106,4 +107,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.get("/")
 async def get_index():
-    return FileResponse(os.path.join(frontend_path, 'index.html'))
+    response = FileResponse(os.path.join(frontend_path, 'index.html'))
+    response.headers["Cache-Control"] = "no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response

@@ -82,6 +82,28 @@ class ColumnService:
         cols = await self.repo.get_for_projects(project_ids)
         return [ColumnOut.model_validate(c) for c in cols]
 
+    async def search(self, query: str, viewer: User) -> list[ColumnOut]:
+        """Поиск категории по номеру или по названию, в пределах видимого зрителю."""
+        q = (query or '').strip()
+        if not q:
+            return []
+
+        all_columns = await self.get_all(project_id=None, viewer=viewer)
+
+        q_lower = q.lower()
+        # Пользователь видит номера с префиксом C (C7), поэтому поиск
+        # должен понимать и его, и голое число.
+        number_part = q_lower[1:] if q_lower.startswith('c') else q_lower
+        by_number = number_part if number_part.isdigit() else None
+
+        matched = [
+            c for c in all_columns
+            if (by_number is not None and str(c.number) == by_number)
+            or q_lower in c.name.lower()
+        ]
+        matched.sort(key=lambda c: (by_number is None or str(c.number) != by_number, c.number))
+        return matched[:30]
+
     async def create(self, data: ColumnCreate, actor: User) -> ColumnOut:
         # Право вести доску проекта проверяется здесь: постановщик
         # создаёт колонки только в своих проектах.

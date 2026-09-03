@@ -67,6 +67,10 @@ let pendingFiles = [];
 let pendingDeletions = [];
 let currentSortMode = 'position';
 let currentFilterMode = 'all';
+// Режим «фокуса»: после перехода из глобального поиска показываем
+// только найденную задачу/категорию, остальное скрыто до сброса.
+let focusFilter = null; // {type:'card', cardId, columnId} | {type:'column', columnId}
+let searchDebounce = null;
 let lastSpacePress = 0;
 let lastAPress = 0;
 let lastCommentId = null;
@@ -81,6 +85,34 @@ const cardSortables = new Map();
 const DOUBLE_PRESS_DELAY = 300;
 const COMMENTS_LIMIT = 20;
 const EVENTS_LIMIT = 20;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// НОМЕРА ЗАДАЧ/КАТЕГОРИЙ — копирование в буфер
+// ─────────────────────────────────────────────────────────────────────────────
+function copyEntityNumber(event, number, kind, prefix) {
+  if (event) event.stopPropagation();
+  const text = `${prefix}${number}`;
+  const done = () => showToast(`Номер ${kind} ${text} скопирован`, 'success', 1500);
+  const fail = () => showToast('Не удалось скопировать номер', 'error');
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(fail);
+  } else {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch (e) {
+      fail();
+    }
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOAST / ALERTS
@@ -765,16 +797,26 @@ function renderBoard() {
 
   const sorter = getCardSorted();
   const filter = getCardFilter();
-  const sortedCols = [...columns].sort((a, b) => a.position - b.position);
+  let sortedCols = [...columns].sort((a, b) => a.position - b.position);
+
+  if (focusFilter) {
+    sortedCols = sortedCols.filter(c => String(c.id) === String(focusFilter.columnId));
+  }
 
   sortedCols.forEach(col => {
-        const colCards = cards
+        let colCards = cards
             .filter(c => c.column_id === col.id)
             .filter(filter)
             .sort(sorter);
 
+        if (focusFilter && focusFilter.type === 'card') {
+          colCards = colCards.filter(c => String(c.id) === String(focusFilter.cardId));
+        }
+
         board.insertAdjacentHTML('beforeend', _renderColumn(col, colCards));
     });
+
+  _renderFocusBanner();
 
 
   if (currentFilterMode !== 'archived') {
@@ -790,6 +832,140 @@ function renderBoard() {
   _renderGlobalFilterBar();
 }
  
+function _renderFocusBanner() {
+  let el = document.getElementById('focus-banner');
+  if (!focusFilter) {
+    if (el) el.remove();
+    return;
+  }
+  const label = focusFilter.type === 'card'
+    ? `Показана только задача T${focusFilter.number}`
+    : `Показана только категория C${focusFilter.number}`;
+
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'focus-banner';
+    el.className = 'w-full flex items-center justify-between gap-3 mb-3 px-3 py-2 rounded-lg ' +
+      'bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm';
+    const board = document.getElementById('board');
+    board.parentNode.insertBefore(el, board);
+  }
+  el.innerHTML = `
+    <span>🔎 ${esc(label)}</span>
+    <button onclick="clearFocus()" class="text-xs font-semibold px-2 py-1 rounded-lg bg-white border border-indigo-200 hover:bg-indigo-100">
+      Показать всё
+    </button>`;
+}
+
+function clearFocus() {
+  focusFilter = null;
+  renderBoard();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ГЛОБАЛЬНЫЙ ПОИСК ЗАДАЧ/КАТЕГОРИЙ ПО НОМЕРУ ИЛИ НАЗВАНИЮ
+// ─────────────────────────────────────────────────────────────────────────────
+function onEntitySearchInput(value, suffix = '') {
+  clearTimeout(searchDebounce);
+  const q = (value || '').trim();
+  if (!q) {
+    closeEntitySearchResults(suffix);
+    return;
+  }
+  searchDebounce = setTimeout(() => _runEntitySearch(q, suffix), 250);
+}
+
+async function _runEntitySearch(query, suffix) {
+  if (!currentUser) return;
+  const data = await api('GET', `/board/search?query=${encodeURIComponent(query)}`, undefined, true);
+  if (!data) return;
+  _renderEntitySearchResults(data, suffix);
+}
+
+function closeEntitySearchResults(suffix = '') {
+  const box = document.getElementById(`entity-search-results${suffix}`);
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+
+function _renderEntitySearchResults(data, suffix) {
+  const box = document.getElementById(`entity-search-results${suffix}`);
+  if (!box) return;
+
+  const cardsRes = data.cards || [];
+  const colsRes = data.columns || [];
+
+  if (!cardsRes.length && !colsRes.length) {
+    box.innerHTML = `<div class="px-3 py-3 text-xs text-slate-400">Ничего не найдено</div>`;
+    box.style.display = 'block';
+    return;
+  }
+
+  window._searchResultsCache = window._searchResultsCache || {};
+  cardsRes.forEach(c => window._searchResultsCache[`card:${c.id}`] = c);
+  colsRes.forEach(c => window._searchResultsCache[`column:${c.id}`] = c);
+
+  const cardItems = cardsRes.map(c => `
+    <button type="button" onclick="goToSearchResultByKey('card:${c.id}')"
+      class="w-full text-left px-3 py-2 hover:bg-indigo-50 flex flex-col gap-0.5 border-b border-slate-50">
+      <span class="flex items-center gap-1.5 text-xs">
+        <span class="font-bold text-indigo-500">T${c.number}</span>
+        <span class="font-medium text-slate-700 truncate">${esc(c.title)}</span>
+      </span>
+      <span class="text-[10px] text-slate-400">📋 задача · ${esc(c.project_name || '')}</span>
+    </button>`).join('');
+
+  const colItems = colsRes.map(c => `
+    <button type="button" onclick="goToSearchResultByKey('column:${c.id}')"
+      class="w-full text-left px-3 py-2 hover:bg-indigo-50 flex flex-col gap-0.5 border-b border-slate-50">
+      <span class="flex items-center gap-1.5 text-xs">
+        <span class="font-bold text-emerald-500">C${c.number}</span>
+        <span class="font-medium text-slate-700 truncate">${esc(c.name)}</span>
+      </span>
+      <span class="text-[10px] text-slate-400">🗂 категория · ${esc(c.project_name || '')}</span>
+    </button>`).join('');
+
+  box.innerHTML = cardItems + colItems;
+  box.style.display = 'block';
+}
+
+async function goToSearchResultByKey(key) {
+  const item = (window._searchResultsCache || {})[key];
+  if (!item) return;
+  const [type] = key.split(':');
+  await goToSearchResult({ type, ...item });
+}
+
+async function goToSearchResult(item) {
+  closeEntitySearchResults('');
+  closeEntitySearchResults('-m');
+  ['entity-search-input', 'entity-search-input-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+
+  if (!currentProject || String(currentProject.id) !== String(item.project_id)) {
+    await switchProject(item.project_id);
+  }
+
+  if (item.type === 'card') {
+    focusFilter = { type: 'card', cardId: item.id, columnId: item.column_id, number: item.number };
+    renderBoard();
+    setTimeout(() => openEditCard(item.id), 50);
+  } else {
+    focusFilter = { type: 'column', columnId: item.id, number: item.number };
+    renderBoard();
+  }
+
+  // Мобильный drawer после перехода можно закрыть, чтобы не мешал.
+  const drawer = document.getElementById('header-drawer');
+  if (drawer) drawer.style.maxHeight = '0px';
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#entity-search-box')) closeEntitySearchResults('');
+  if (!e.target.closest('#entity-search-box-m')) closeEntitySearchResults('-m');
+});
+
 function _renderColumn(col, colCards) {
   const ce = !!currentUser;
   // Категориями и задачами проекта распоряжается тот, кто за него отвечает
@@ -806,6 +982,8 @@ function _renderColumn(col, colCards) {
       <div class="col-handle flex justify-between items-center px-4 pt-3 pb-2
                   border-b border-slate-100 select-none">
         <div class="flex items-center gap-2 min-w-0">
+          <button onclick="event.stopPropagation(); copyEntityNumber(event, ${col.number}, 'категории', 'C')" title="Скопировать номер категории"
+            class="text-[10px] font-bold text-slate-400 hover:text-indigo-600 flex-shrink-0">C${col.number}</button>
           <h3 class="font-semibold text-slate-800 truncate text-sm" title="${esc(col.name)}">${esc(col.name)}</h3>
           <span class="bg-slate-100 text-slate-500 text-[10px] font-medium px-1.5 py-0.5 rounded-full flex-shrink-0">${count}</span>
           ${isArchived ? `<span class="bg-amber-100 text-amber-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide">архив</span>` : ''}
@@ -895,15 +1073,21 @@ function updateColumnsVisibility() {
 // ─────────────────────────────────────────────────────────────────────────────
 // RENDER CARD
 // ─────────────────────────────────────────────────────────────────────────────
-function _deadlineBadge(deadline) {
+function _deadlineBadge(deadline, status) {
   if (!deadline) return '';
+
+  // Задача на проверке или уже готова — предупреждение о сроке больше
+  // не актуально: работа над ней закончена, гнать дедлайном некого.
+  const deadlineIrrelevant = status === 'REVIEW' || status === 'DONE';
 
   const dl = new Date(deadline);
   const now = Date.now();
   const diff = dl - now;
   let cls, label;
 
-  if (diff < 0) {
+  if (deadlineIrrelevant) {
+    cls = 'deadline-ok'; label = '';
+  } else if (diff < 0) {
     cls = 'deadline-overdue'; label = 'Прострочен';
   } else if (diff < 86400000) {
     cls = 'deadline-soon'; label = 'Скоро';
@@ -970,6 +1154,11 @@ function _renderCard(c) {
         <div class="flex items-start justify-between gap-1">
           <div class="flex flex-col gap-1 flex-1">
             <div class="flex flex-wrap items-center gap-1">
+              <button onclick="event.stopPropagation(); copyEntityNumber(event, ${c.number}, 'задачи', 'T')" title="Скопировать номер задачи"
+                class="inline-flex items-center gap-0.5 w-fit px-1.5 py-0.5 rounded text-[9px] font-bold
+                       bg-slate-100 text-slate-500 hover:bg-indigo-100 hover:text-indigo-600 transition-colors">
+                T${c.number} 📋
+              </button>
               <span class="inline-block w-fit px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${p.bg} ${p.textColor}">
                 ${p.text}
               </span>
@@ -1018,7 +1207,7 @@ function _renderCard(c) {
 
         ${c.description ? `<p class="text-slate-500 text-[11px] line-clamp-2 leading-relaxed">${esc(c.description)}</p>` : ''}
 
-        ${c.deadline ? `<div class="mt-0.5">${_deadlineBadge(c.deadline)}</div>` : ''}
+        ${c.deadline ? `<div class="mt-0.5">${_deadlineBadge(c.deadline, c.status)}</div>` : ''}
 
         <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100 mt-0.5">
           <div class="flex flex-col gap-0.5 min-w-0">
@@ -2485,9 +2674,9 @@ async function openEditCard(cardId) {
   _renderAssigneeChips();
 
   document.getElementById('modal-card-title').textContent =
-    isArchived ? '📦 Просмотр (архив)'
+    (isArchived ? '📦 Просмотр (архив)'
     : (isCommentOnly   ? '💬 Задача (можно комментировать)'
-    :                    'Редактирование задачи');
+    :                    'Редактирование задачи')) + ` · T${card.number}`;
 
   document.getElementById('card-edit-id').value = cardId;
   document.getElementById('card-col-id').value = card.column_id;
@@ -3467,6 +3656,7 @@ async function switchProject(projectId) {
     closeProjectDrawer();
     return;
   }
+  focusFilter = null;
   currentProject = { id: projectId };
   closeProjectDrawer();
   _applyJournalLayout();   // уходим с журнала — возвращаем доску

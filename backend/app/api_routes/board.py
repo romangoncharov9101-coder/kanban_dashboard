@@ -155,6 +155,43 @@ async def get_global_board(
     }
 
 
+@router.get('/search')
+async def search_board(
+    query: str = Query(..., min_length=1, max_length=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Быстрый поиск задачи/категории по номеру или названию, по всем
+    проектам, доступным текущему пользователю. Результат несёт
+    project_id (и column_id для задачи), чтобы клиент мог сразу
+    переключиться на нужную доску и показать именно эту сущность.
+    """
+    card_service = CardService(db)
+    column_service = ColumnService(db)
+    project_service = ProjectService(db)
+
+    cards = await card_service.search(query, current_user)
+    columns = await column_service.search(query, current_user)
+
+    project_ids = {c.project_id for c in cards} | {c.project_id for c in columns}
+    names = {}
+    for pid in project_ids:
+        project = await project_service.repo.get_by_id(pid)
+        names[pid] = project.name if project else '—'
+
+    return {
+        'cards': [
+            {**c.model_dump(mode='json'), 'project_name': names.get(c.project_id, '—')}
+            for c in cards
+        ],
+        'columns': [
+            {**c.model_dump(mode='json'), 'project_name': names.get(c.project_id, '—')}
+            for c in columns
+        ],
+    }
+
+
 async def _effective_members(project_service: ProjectService, project) -> list[dict]:
     """Ответственные проекта вместе с унаследованными от родителя."""
     member_ids = await project_service.get_member_ids_for_card(project.id)

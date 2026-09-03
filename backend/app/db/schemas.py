@@ -233,6 +233,7 @@ class CardMoveRequest(BaseModel):
 
 class CardOut(BaseModel):
     id: UUID
+    number: int
     title: str
     description: str | None
     column_id: UUID
@@ -360,6 +361,7 @@ class ColumnUpdate(BaseModel):
 
 class ColumnOut(BaseModel):
     id: UUID
+    number: int
     name: str
     position: int
     project_id: UUID
