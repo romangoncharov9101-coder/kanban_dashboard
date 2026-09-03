@@ -2675,7 +2675,7 @@ async function openEditCard(cardId) {
 
   document.getElementById('modal-card-title').textContent =
     (isArchived ? '📦 Просмотр (архив)'
-    : (isCommentOnly   ? '💬 Задача (можно комментировать)'
+    : (isCommentOnly   ? '💬 Задача'
     :                    'Редактирование задачи')) + ` · T${card.number}`;
 
   document.getElementById('card-edit-id').value = cardId;
