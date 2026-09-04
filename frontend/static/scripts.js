@@ -63,6 +63,13 @@ function isGlobalBoard() {
 }
 let cardModalReadOnly = false;  // полный запрет редактирования (архив, чужой проект)
 let cardModalCommentOnly = false; // только комментарии: назначен исполнителем, но не автор
+// Можно ли в текущем окне трогать вложения. Считается отдельно от
+// остальных прав: исполнитель чужой задачи файлы прикладывать может.
+let cardModalCanEditAttachments = false;
+// В режиме «только комментарии» кнопки «Сохранить» нет, поэтому копить
+// файлы в pendingFiles бессмысленно — их некому будет отправить.
+// Такие вложения уходят на сервер сразу при выборе.
+let cardModalInstantAttachments = false;
 let pendingFiles = [];
 let pendingDeletions = [];
 let currentSortMode = 'position';
@@ -321,14 +328,29 @@ const ROLE_LABELS = {
 function isAdmin()   { return currentUser?.role === 'ADMIN'; }
 function isManager() { return currentUser?.role === 'ADMIN' || currentUser?.role === 'TEAM_LEAD'; }
 
-// Право менять саму задачу принадлежит админу и АВТОРУ задачи.
+// Право менять саму задачу принадлежит админу и АВТОРУ задачи —
+// независимо от его роли. Обычный сотрудник, заведший себе задачу,
+// распоряжается ею так же, как постановщик своей.
 // Постановщик, которого лишь назначили исполнителем чужой задачи,
 // её не редактирует — только комментирует и двигает.
+// Правило совпадает с CardService._can_manage на сервере.
 function canManageCard(card) {
   if (!currentUser || !card) return false;
   if (isAdmin()) return true;
-  return currentUser.role === 'TEAM_LEAD'
-      && String(card.created_by) === String(currentUser.user_id);
+  return String(card.created_by) === String(currentUser.user_id);
+}
+
+// Вложения — единственная часть карточки, доступная шире остального:
+// ими распоряжаются админ, автор задачи и любой её исполнитель.
+// Исполнителю это нужно, чтобы приложить результат работы, не имея
+// при этом права переписывать условие. Совпадает с
+// CardService._can_edit_attachments на сервере.
+function canEditAttachments(card) {
+  if (!currentUser || !card) return false;
+  if (isAdmin()) return true;
+  const meId = String(currentUser.user_id);
+  if (String(card.created_by) === meId) return true;
+  return (card.assignees || []).some(a => String(a.user_id) === meId);
 }
 
 // Карточка принадлежит другому проекту (пришла в сводку подпроектов).
@@ -1547,21 +1569,31 @@ function _renderAttachmentsList(attachments) {
     nameEl.className = 'flex-1 truncate text-slate-700';
     nameEl.textContent = a.filename;
  
-    const dlLink = document.createElement('a');
-    const cardId = document.getElementById('card-edit-id').value;
-    dlLink.href = `${API}/cards/${cardId}/attachments/${encodeURIComponent(a.id)}/download`;
-    dlLink.download = a.filename;
-    dlLink.className = 'text-indigo-500 hover:text-indigo-700 flex-shrink-0';
-    dlLink.title = 'Скачать';
-    dlLink.textContent = '⬇';
- 
     item.appendChild(iconSpan);
     item.appendChild(nameEl);
-    item.appendChild(dlLink);
 
-    // Удалять вложение может автор задачи или админ.
+    if (a.isPending) {
+      // Файл ещё не на сервере: скачивать нечего, ссылка вела бы в 404.
+      item.className = 'flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs';
+      const badge = document.createElement('span');
+      badge.className = 'text-amber-600 text-[10px] flex-shrink-0';
+      badge.textContent = 'ожидает';
+      item.appendChild(badge);
+    } else {
+      const dlLink = document.createElement('a');
+      const cardId = document.getElementById('card-edit-id').value;
+      dlLink.href = `${API}/cards/${cardId}/attachments/${encodeURIComponent(a.id)}/download`;
+      dlLink.download = a.filename;
+      dlLink.className = 'text-indigo-500 hover:text-indigo-700 flex-shrink-0';
+      dlLink.title = 'Скачать';
+      dlLink.textContent = '⬇';
+      item.appendChild(dlLink);
+    }
+
+    // Удалять вложение может тот же круг, что и прикреплять:
+    // админ, автор задачи и её исполнители.
     // Скачать — любой, кто видит карточку.
-    if (!cardModalReadOnly && !cardModalCommentOnly) {
+    if (cardModalCanEditAttachments) {
       const delBtn = document.createElement('button');
       delBtn.className = 'text-red-400 hover:text-red-600 flex-shrink-0';
       delBtn.title = 'Удалить';
@@ -1591,13 +1623,24 @@ function handleFileInputChange(event) {
 }
 
 async function _processFiles(files) {
-  const MAX_SIZE = 10 * 1024 * 1024;
+  // Лимиты держим ровно те же, что и на сервере (5 МБ, 5 файлов на карточку):
+  // иначе пользователь узнаёт об отказе только после загрузки.
+  const MAX_SIZE = 5 * 1024 * 1024;
+  const MAX_FILES = 5;
   const ALLOWED  = ['image/', 'application/pdf', 'application/msword',
                     'application/vnd.openxmlformats', 'application/vnd.ms-excel',
                     'text/plain', 'application/zip'];
 
   const cardId = document.getElementById('card-edit-id').value;
 
+  if (!cardModalCanEditAttachments) {
+    return toast.warn('Прикреплять файлы к этой задаче вам нельзя');
+  }
+
+  const card = cardId ? findCardById(cardId) : null;
+  const already = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id)).length;
+
+  const accepted = [];
   for (const file of files) {
     if (file.size > MAX_SIZE) {
       toast.warn(`«${file.name}» слишком большой (макс. 5 МБ)`); continue;
@@ -1606,9 +1649,25 @@ async function _processFiles(files) {
     if (!allowed) {
       toast.warn(`«${file.name}» — неподдерживаемый тип файла`); continue;
     }
-
-    _addToPending(file);
+    if (already + pendingFiles.length + accepted.length >= MAX_FILES) {
+      toast.warn(`Больше ${MAX_FILES} файлов на задачу прикрепить нельзя`); break;
+    }
+    accepted.push(file);
   }
+
+  if (!accepted.length) return;
+
+  if (cardModalInstantAttachments && cardId) {
+    // Исполнителю сохранять нечего — форма ему закрыта. Отправляем файл
+    // на сервер сразу, чтобы он не пропал при закрытии окна.
+    for (const file of accepted) {
+      await _uploadFileTo(cardId, file);
+    }
+    _refreshAttachmentsUI();
+    return;
+  }
+
+  accepted.forEach(_addToPending);
   _refreshAttachmentsUI();
 }
 
@@ -1618,8 +1677,11 @@ function _refreshAttachmentsUI() {
   
   const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
   
-  const pending = pendingFiles.map((f, index) => ({
-    id: `pending-${index}`,
+  // id ожидающих файлов — их имя: именно по нему deleteAttachment
+  // убирает файл из очереди. Индекс сюда не годится, он «уезжает»
+  // после удаления любого элемента из середины списка.
+  const pending = pendingFiles.map(f => ({
+    id: f.name,
     filename: f.name,
     isPending: true
   }));
@@ -1690,7 +1752,9 @@ async function _uploadFileTo(cardId, file) {
     if (card) {
       if (!card.attachments) card.attachments = [];
       card.attachments.push(result);
-      _renderAttachmentsList(card.attachments);
+      // Через _refreshAttachmentsUI, а не напрямую: иначе из списка
+      // пропадут файлы, ещё стоящие в очереди на отправку.
+      _refreshAttachmentsUI();
       renderBoard();
     }
   }
@@ -1714,21 +1778,51 @@ async function uploadAttachment() {
 }
 
 async function deleteAttachment(attachmentId, isPending = false) {
+  if (!cardModalCanEditAttachments) {
+    return toast.warn('Удалять вложения этой задачи вам нельзя');
+  }
+
   if (isPending) {
     pendingFiles = pendingFiles.filter(f => f.name !== attachmentId);
-  } else {
-    if (!pendingDeletions.includes(attachmentId)) {
-      pendingDeletions.push(attachmentId);
-    }
+    _refreshAttachmentsUI();
+    return;
   }
 
   const cardId = document.getElementById('card-edit-id').value;
-  const card = findCardById(cardId);
-  const existing = (card?.attachments || []).filter(a => !pendingDeletions.includes(a.id));
-  const pending = pendingFiles.map(f => ({ filename: f.name, isPending: true }));
-  
-  _renderAttachmentsList([...existing, ...pending]);
-  toast.success('Вложение помечено на удаление.');
+
+  if (cardModalInstantAttachments) {
+    // Кнопки «Сохранить» в этом режиме нет, поэтому отложенное удаление
+    // никогда бы не применилось. Спрашиваем подтверждение и удаляем сразу.
+    if (!confirm('Удалить вложение? Действие необратимо.')) return;
+    // Напрямую через fetch, а не через api(): тот возвращает null и на
+    // успешный 204, и на ошибку, а здесь эти случаи надо различать.
+    let res;
+    try {
+      res = await fetch(`${API}/cards/attachments/${attachmentId}`,
+                        { method: 'DELETE', credentials: 'include' });
+    } catch (e) {
+      return toast.error('Не удалось связаться с сервером');
+    }
+    if (!res.ok) {
+      let detail = `Ошибка ${res.status}`;
+      try { detail = (await res.json())?.detail || detail; } catch (e) {}
+      return toast.error(typeof detail === 'string' ? detail : 'Не удалось удалить вложение');
+    }
+    const card = findCardById(cardId);
+    if (card) {
+      card.attachments = (card.attachments || []).filter(a => String(a.id) !== String(attachmentId));
+    }
+    _refreshAttachmentsUI();
+    renderBoard();
+    toast.success('Вложение удалено');
+    return;
+  }
+
+  if (!pendingDeletions.includes(attachmentId)) {
+    pendingDeletions.push(attachmentId);
+  }
+  _refreshAttachmentsUI();
+  toast.success('Вложение помечено на удаление. Нажмите «Сохранить».');
 }
 
 function downloadAllAttachments() {
@@ -2548,10 +2642,18 @@ function _applyCardModalMode(opts = {}) {
   if (assignHint) assignHint.style.display = lockedAssignees ? 'none' : '';
   closeAssigneePicker();
 
-  // Загрузка вложений — автору и админу. Уже прикреплённые файлы
-  // остаются видимыми и скачиваемыми в любом режиме кроме архива.
+  // Загрузка вложений — автору, админу и назначенным исполнителям.
+  // Исполнителю остальные поля закрыты, но приложить файл к своей
+  // работе он должен уметь. Уже прикреплённые файлы остаются видимыми
+  // и скачиваемыми в любом режиме кроме архива.
+  cardModalCanEditAttachments =
+    !ro && !opts.hideAttachments && opts.canEditAttachments !== false;
+  // Без кнопки «Сохранить» файл отправляем сразу, иначе он потеряется.
+  cardModalInstantAttachments = cardModalCanEditAttachments && commentOnly;
   const dropZone = document.getElementById('drop-zone');
-  if (dropZone) dropZone.style.display = (ro || commentOnly || opts.hideAttachments) ? 'none' : '';
+  if (dropZone) dropZone.style.display = cardModalCanEditAttachments ? '' : 'none';
+  const dropHint = document.getElementById('drop-zone-instant-hint');
+  if (dropHint) dropHint.style.display = cardModalInstantAttachments ? '' : 'none';
 
   // Комментарии доступны всем, кто видит карточку. Закрыты только в архиве.
   const commentInput = document.querySelector('#comments-section .relative.group');
@@ -2689,6 +2791,7 @@ async function openEditCard(cardId) {
     hideAttachments: isArchived,
     hideComments: isArchived,
     canChangeStatus: canChangeStatus(card),
+    canEditAttachments: canEditAttachments(card),
     lockAssignees: ownPersonalCard,
   });
 
@@ -2825,10 +2928,16 @@ async function submitCard() {
       title,
       description: desc || null,
       status: _getStatusRadio(),
-      assignee_ids: assigneeIds,
       deadline,
       priority,
     };
+
+    // Состав исполнителей отправляем только если пользователь вправе его
+    // менять. Обычный сотрудник, редактирующий свою задачу, поля не видит,
+    // и присылать его не должен — сервер отвечает на это 403.
+    if (isManager() || !editId) {
+      payload.assignee_ids = assigneeIds;
+    }
 
   let result;
     if (editId) {
@@ -4341,6 +4450,10 @@ document.addEventListener('DOMContentLoaded', () => {
     modalCard.addEventListener('close', () => {
       cardModalReadOnly = false;
       cardModalCommentOnly = false;
+      cardModalCanEditAttachments = false;
+      cardModalInstantAttachments = false;
+      const instantHint = document.getElementById('drop-zone-instant-hint');
+      if (instantHint) instantHint.style.display = 'none';
       selectedAssignees = [];
       const chips = document.getElementById('assignee-chips');
       if (chips) chips.innerHTML = '';
@@ -4366,6 +4479,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function refreshScrollLock() {
     const anyOpen = !!document.querySelector('dialog[open]');
+    // Класс на body отключает hover-эффекты доски под окном — см. CSS.
+    // Без этого браузер продолжает пересчитывать тени карточек,
+    // которых всё равно не видно за подложкой.
+    document.body.classList.toggle('modal-open', anyOpen);
     if (anyOpen && lockCount === 0) {
       lockCount = 1;
       document.body.style.overflow = 'hidden';

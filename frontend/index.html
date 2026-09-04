@@ -6,7 +6,7 @@
   <title>Task Board</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
-  <script defer src="./static/scripts.js?v=1.1.5"></script>
+  <script defer src="./static/scripts.js?v=1.2.0"></script>
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; touch-action: pan-y; }
     body.dragging-active, 
@@ -30,7 +30,12 @@
     .col-handle:active { cursor:grabbing; }
     .ws-on  { background:#22c55e; }
     .ws-off { background:#ef4444; }
-    dialog::backdrop { background:rgba(0,0,0,.4); }
+    /* Пока открыто модальное окно, доска под ним всё равно не видна.
+       Снимаем с неё hover-эффекты и переходы: иначе браузер продолжает
+       пересчитывать тени десятков карточек впустую. */
+    body.modal-open .card-item { transition:none; }
+    body.modal-open .card-item:hover { box-shadow:none; }
+    body.modal-open #board { pointer-events:none; }
     @keyframes slideInRight {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
@@ -55,8 +60,14 @@
     .animate-bounce-in { animation: bounce-in 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards; }
 
     /* ── Dialog ──────────────────────────────────────────────────────── */
-    dialog { border:none; border-radius:1rem; padding:0; box-shadow:0 25px 60px rgba(0,0,0,.25); max-width:95vw; }
-    dialog::backdrop { background:rgba(0,0,0,.45); backdrop-filter:blur(2px); }
+    /* Тень сделана короткой намеренно: размытие в 60px браузер пересчитывает
+       программно на каждой перерисовке окна, и на слабом железе это заметно. */
+    dialog { border:none; border-radius:1rem; padding:0; box-shadow:0 8px 20px rgba(0,0,0,.22); max-width:95vw; }
+    /* Раньше здесь стоял backdrop-filter: blur(2px). Он заставлял браузер
+       на КАЖДОМ кадре заново снимать и размывать всю доску под окном —
+       на машинах без аппаратного ускорения это давало сильные тормоза.
+       Плоская заливка визуально решает ту же задачу и ничего не стоит. */
+    dialog::backdrop { background:rgba(15,23,42,.55); }
 
     /* ── Deadline badge colours ──────────────────────────────────────── */
     .deadline-ok      { background:#dcfce7; color:#15803d; }
@@ -732,7 +743,9 @@
             Перетяните файл сюда, <span class="text-indigo-600 font-medium">выберите</span>
             или вставьте из буфера <kbd class="bg-slate-100 px-1 rounded text-[10px]">Ctrl+V</kbd>
           </p>
-          <p class="text-[10px] text-slate-400 mt-1">Изображения, PDF, DOC, XLS, TXT, ZIP · до 5 МБ</p>
+          <p class="text-[10px] text-slate-400 mt-1">Изображения, PDF, DOC, XLS, TXT, ZIP · до 5 МБ · не более 5 файлов</p>
+          <p id="drop-zone-instant-hint" style="display:none"
+             class="text-[10px] text-indigo-500 mt-1">Файл прикрепится сразу — кнопка «Сохранить» не нужна</p>
 
           <input id="attachment-file-input" type="file" class="hidden"
             accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"

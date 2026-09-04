@@ -124,8 +124,14 @@ class CardService:
         Быть постановщиком, не будучи при этом исполнителем, для
         вложений недостаточно — на остальные поля карточки это право
         не распространяется (см. _can_manage).
+
+        Автор задачи входит сюда всегда, даже если сам не назначен
+        исполнителем: раз он владеет условием задачи, он владеет и
+        приложенными к нему файлами.
         """
         if user.role is UserRole.ADMIN:
+            return True
+        if str(card.created_by) == str(user.user_id):
             return True
         return card.is_assignee(user.user_id)
 
@@ -134,7 +140,7 @@ class CardService:
         if not self._can_edit_attachments(card, user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail='Управлять вложениями может только исполнитель, назначенный на карточку, или администратор.',
+                detail='Управлять вложениями может только автор задачи, назначенный на неё исполнитель или администратор.',
             )
 
     async def _card_ctx(self, card: Card) -> dict:
@@ -393,9 +399,13 @@ class CardService:
         # Исполнители: полная замена списка
         assignees_changed = False
         if ('assignee_ids' in sent_fields and data.assignee_ids is not None
-                and not actor.is_manager):
+                and not actor.is_manager
+                and set(data.assignee_ids) != old_assignee_ids):
             # Состав исполнителей личной задачи неизменен: её автор
             # остаётся единственным исполнителем.
+            # Сравниваем со старым составом, а не просто с фактом присылки
+            # поля: форма редактирования отправляет карточку целиком, и
+            # неизменный список исполнителей не должен ронять сохранение.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail='В собственной задаче нельзя менять исполнителей.',
