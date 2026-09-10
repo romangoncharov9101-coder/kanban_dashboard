@@ -37,6 +37,39 @@ class SessionRepository:
         )
         return result.scalar_one_or_none()
     
+    async def touch(self, db_session: Session) -> bool:
+        """
+        Продлевает сессию «от текущего момента»: пользователь работает —
+        значит, выбрасывать его не за что."""
+        if not settings.SESSION_SLIDING_ENABLED:
+            return False
+
+        now = datetime.now(timezone.utc)
+        current = db_session.expires_at
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+
+        new_expires = now + timedelta(seconds=settings.SESSION_TTL_SECONDS)
+
+        absolute = settings.SESSION_ABSOLUTE_TTL_SECONDS
+        if absolute and absolute > 0:
+            created = db_session.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            hard_limit = created + timedelta(seconds=absolute)
+            if new_expires > hard_limit:
+                new_expires = hard_limit
+
+        # Сдвиг меньше порога — не трогаем БД.
+        if (new_expires - current).total_seconds() < settings.SESSION_REFRESH_INTERVAL_SECONDS:
+            return False
+        if new_expires <= current:
+            return False
+
+        db_session.expires_at = new_expires
+        await self.session.flush()
+        return True
+
     async def delete(self, session_id: uuid.UUID) -> None:
         await self.session.execute(
             delete(Session).where(Session.id == session_id)

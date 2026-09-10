@@ -26,7 +26,10 @@ class Settings(BaseSettings):
     EVENT_MAX_AGE_SECONDS: int = 86400
 
     SESSION_SECRET_KEY: str = "CHANGE_ME_in_production_use_random_32+_chars"
-    SESSION_TTL_SECONDS: int = 86400
+    SESSION_TTL_SECONDS: int = 1209600
+    SESSION_SLIDING_ENABLED: bool = True
+    SESSION_REFRESH_INTERVAL_SECONDS: int = 900
+    SESSION_ABSOLUTE_TTL_SECONDS: int = 7776000
     SESSION_COOKIE_NAME: str = "tb_session"
     SESSION_COOKIE_SECURE: bool = False
     EXPOSE_DOCS: bool = True

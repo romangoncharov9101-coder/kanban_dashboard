@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -9,7 +9,25 @@ from app.repositories.session_repo import SessionRepository
 
 settings = get_settings()
 
-async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+
+def set_session_cookie(response: Response, signed_value: str) -> None:
+    """
+    Ставит cookie сессии. Живёт здесь, а не в роутере логина, потому что
+    её переставляет ещё и get_current_user при продлении сессии: без этого
+    сервер считал бы сессию живой, а браузер выбросил бы cookie по max_age.
+    """
+    response.set_cookie(
+        key=settings.SESSION_COOKIE_NAME,
+        value=signed_value,
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite='lax',
+        max_age=settings.SESSION_TTL_SECONDS,
+        path='/',
+    )
+
+
+async def get_current_user(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> User:
     """
     Dependency для защищённых REST-эндпоинтов.
 
@@ -18,7 +36,8 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
       2. Верифицируем HMAC-подпись через unsign_session_id
       3. SELECT sessions + JOIN users WHERE id = session_id AND expires_at > now
       4. Проверяем, что учётка не деактивирована
-      5. Возвращаем User
+      5. Продлеваем сессию, раз пользователь активен
+      6. Возвращаем User
 
     Raises 401 если cookie отсутствует, подпись невалидна или сессия истекла.
     Raises 403 если учётная запись деактивирована администратором.
@@ -51,6 +70,13 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
             status_code=status.HTTP_403_FORBIDDEN,
             detail='Учётная запись деактивирована. Обратитесь к администратору.',
         )
+
+    # Пользователь только что обратился к API — значит, он за компьютером.
+    # Сдвигаем срок жизни сессии и заодно обновляем max_age у cookie.
+    # touch() сам решает, стоит ли писать в БД (не чаще раза в четверть часа).
+    if await repo.touch(db_session):
+        set_session_cookie(response, cookie_value)
+
     return user
 
 def require_roles(*roles: UserRole):
@@ -97,6 +123,11 @@ async def get_current_user_ws(ws) -> User | None:
         db_session = await repo.get_valid(session_id)
         if db_session is None or not db_session.user.is_active:
             return None
+        # Вкладка может часами висеть открытой и общаться с сервером только
+        # по WebSocket. Продлеваем сессию и здесь, иначе такой пользователь
+        # «протухнет», ни разу не отойдя от рабочего места.
+        if await repo.touch(db_session):
+            await db.commit()
         return db_session.user
 
 async def get_current_user_optional(
