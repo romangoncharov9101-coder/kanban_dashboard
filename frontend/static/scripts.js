@@ -1990,6 +1990,17 @@ function _addToPending(file) {
 function _renderPendingList() {
   const list  = document.getElementById('attachments-list');
   const dlBtn = document.getElementById('btn-download-all');
+
+  // Галерею перерисовываем всегда, даже если очередь пуста: иначе в окне
+  // новой задачи оставались миниатюры от предыдущей открытой карточки.
+  _renderAttachmentsGallery(pendingFiles.map(f => ({
+    id: f.name,
+    filename: f.name,
+    isPending: true,
+    content_type: f.type,
+    _file: f
+  })));
+
   if (!list) return;
 
   if (!pendingFiles.length) {
@@ -3039,7 +3050,11 @@ async function openAddCard(colId) {
   listContainer.classList.add('hidden');
 
   clearDeadline();
+  // Очередь на удаление относится к ранее открытой карточке — в новой
+  // задаче ей делать нечего.
+  _revokePendingPreviews();
   pendingFiles = [];
+  pendingDeletions = [];
   _renderPendingList();
   document.getElementById('modal-card').showModal();
   setTimeout(() => document.getElementById('card-title-input').focus(), 50);
