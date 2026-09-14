@@ -1,10 +1,15 @@
 import asyncio
+import hashlib
+import os
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
- 
+
 from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
 from app.exceptions import (
@@ -17,7 +22,7 @@ from app.router import router as ws_router
 from app.manager import manager
 from app.tasks import event_cleanup_task, session_cleanup_task
 from app.core.bootstrap import ensure_admin_exists
- 
+
 setup_logging()
 logger = get_logger("main")
 settings = get_settings()
@@ -80,22 +85,28 @@ app.include_router(ws_router)
 async def health():
     return {'status': 'ok'}
 
-from fastapi.responses import FileResponse
-
-from fastapi.staticfiles import StaticFiles
-import os
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
-
 root_dir = os.path.dirname(os.path.dirname(current_dir))
 frontend_path = os.path.join(root_dir, "frontend")
 
 print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
+SCRIPTS_JS_PATH = os.path.join(frontend_path, "static", "scripts.js")
+INDEX_HTML_PATH = os.path.join(frontend_path, "index.html")
+
+SCRIPT_TAG_PATTERN = 'src="./static/scripts.js?v='
+
+
+def file_hash(path: str, length: int = 8) -> str:
+    """Короткий md5-хэш содержимого файла — используется как cache-busting версия в URL."""
+    with open(path, "rb") as f:
+        return hashlib.md5(f.read()).hexdigest()[:length]
+
+
 class MyStaticFiles(StaticFiles):
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
 
@@ -107,7 +118,19 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.get("/")
 async def get_index():
-    response = FileResponse(os.path.join(frontend_path, 'index.html'))
+    scripts_version = file_hash(SCRIPTS_JS_PATH)
+
+    with open(INDEX_HTML_PATH, encoding="utf-8") as f:
+        html = f.read()
+
+    prefix, _, rest = html.partition(SCRIPT_TAG_PATTERN)
+    if rest:
+        _, _, tail = rest.partition('"')
+        html = f'{prefix}{SCRIPT_TAG_PATTERN}{scripts_version}"{tail}'
+    else:
+        logger.warning("Не найден тег scripts.js в index.html — версия не подставлена")
+
+    response = HTMLResponse(html)
     response.headers["Cache-Control"] = "no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     return response
