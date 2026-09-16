@@ -237,21 +237,13 @@ function showAppUpdateBanner() {
   reloadBtn.textContent = 'Обновить';
   reloadBtn.onclick = () => location.reload();
 
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.className = 'text-indigo-400 hover:text-indigo-600 flex-shrink-0 text-lg leading-none';
-  closeBtn.textContent = '×';
-  closeBtn.onclick = () => _removeToast(banner);
-
   body.appendChild(msgEl);
   body.appendChild(reloadBtn);
-  body.appendChild(closeBtn);
   banner.appendChild(bar);
   banner.appendChild(body);
   container.appendChild(banner);
-  // «×» просто прячет тост — сама пометка «доступно обновление» до конца
-  // сессии не сбрасывается (_appUpdateBannerShown), повторно всплывать
-  // не будет, пока страница не перезагрузится или не случится новый деплой.
+  // Намеренно без auto-dismiss и без кнопки «×» — предупреждение важное,
+  // пусть висит, пока пользователь сам не обновится.
 }
  
 // ─────────────────────────────────────────────────────────────────────────────
