@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import os
 from contextlib import asynccontextmanager
 
@@ -12,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
+from app.core.version import get_app_version, SCRIPTS_JS_PATH, INDEX_HTML_PATH
 from app.exceptions import (
     http_exception_handler,
     validation_exception_handler,
@@ -91,16 +91,8 @@ frontend_path = os.path.join(root_dir, "frontend")
 
 print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
-SCRIPTS_JS_PATH = os.path.join(frontend_path, "static", "scripts.js")
-INDEX_HTML_PATH = os.path.join(frontend_path, "index.html")
-
 SCRIPT_TAG_PATTERN = 'src="./static/scripts.js?v='
-
-
-def file_hash(path: str, length: int = 8) -> str:
-    """Короткий md5-хэш содержимого файла — используется как cache-busting версия в URL."""
-    with open(path, "rb") as f:
-        return hashlib.md5(f.read()).hexdigest()[:length]
+VERSION_META_PATTERN = 'id="app-version-meta" name="app-version" content="'
 
 
 class MyStaticFiles(StaticFiles):
@@ -118,7 +110,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.get("/")
 async def get_index():
-    scripts_version = file_hash(SCRIPTS_JS_PATH)
+    scripts_version = get_app_version()
 
     with open(INDEX_HTML_PATH, encoding="utf-8") as f:
         html = f.read()
@@ -129,6 +121,16 @@ async def get_index():
         html = f'{prefix}{SCRIPT_TAG_PATTERN}{scripts_version}"{tail}'
     else:
         logger.warning("Не найден тег scripts.js в index.html — версия не подставлена")
+
+    # Кладём ту же версию в <meta>, чтобы фронт мог передать её при подключении
+    # к WebSocket (app.router) и сверить со свежей версией на сервере —
+    # так уже открытые вкладки узнают об обновлении без Ctrl+F5.
+    prefix, _, rest = html.partition(VERSION_META_PATTERN)
+    if rest:
+        _, _, tail = rest.partition('"')
+        html = f'{prefix}{VERSION_META_PATTERN}{scripts_version}"{tail}'
+    else:
+        logger.warning("Не найден <meta name=\"app-version\"> в index.html — версия не подставлена")
 
     response = HTMLResponse(html)
     response.headers["Cache-Control"] = "no-store, must-revalidate"

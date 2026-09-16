@@ -201,6 +201,50 @@ function _removeToast(toast) {
   toast.style.cssText = 'opacity:0;transform:translateX(120%);transition:all .3s ease';
   setTimeout(() => toast.remove(), 320);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// БАННЕР «ДОСТУПНО ОБНОВЛЕНИЕ»
+// ─────────────────────────────────────────────────────────────────────────────
+// Приходит по WS (событие 'app_updated'), когда версия scripts.js на сервере
+// разошлась с той, с которой была загружена текущая вкладка — то есть был
+// деплой. Не перезагружаем страницу сами (пользователь может редактировать
+// карточку), а показываем постоянный тост с кнопкой «Обновить».
+let _appUpdateBannerShown = false;
+
+function showAppUpdateBanner() {
+  if (_appUpdateBannerShown) return;
+  _appUpdateBannerShown = true;
+
+  const container = document.getElementById('toast-container');
+  if (!container) { location.reload(); return; }
+
+  const banner = document.createElement('div');
+  banner.className = 'pointer-events-auto border border-indigo-500 bg-indigo-50 rounded-xl shadow-xl flex overflow-hidden animate-slide-in';
+
+  const bar = document.createElement('div');
+  bar.className = 'bg-indigo-500 w-1.5 flex-shrink-0';
+
+  const body = document.createElement('div');
+  body.className = 'flex items-center gap-3 px-4 py-3 flex-1 min-w-0';
+
+  const msgEl = document.createElement('span');
+  msgEl.className = 'text-sm text-indigo-800 flex-1 min-w-0';
+  msgEl.textContent = 'Доступна новая версия приложения';
+
+  const reloadBtn = document.createElement('button');
+  reloadBtn.type = 'button';
+  reloadBtn.className = 'bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-700 flex-shrink-0';
+  reloadBtn.textContent = 'Обновить';
+  reloadBtn.onclick = () => location.reload();
+
+  body.appendChild(msgEl);
+  body.appendChild(reloadBtn);
+  banner.appendChild(bar);
+  banner.appendChild(body);
+  container.appendChild(banner);
+  // Намеренно без auto-dismiss и без кнопки «×» — предупреждение важное,
+  // пусть висит, пока пользователь сам не обновится.
+}
  
 // ─────────────────────────────────────────────────────────────────────────────
 // API helper
@@ -522,8 +566,13 @@ const _wsMaxDelay  = 60000;
 function connectWS() {
   if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
   if (ws) { ws.onclose = null; if (ws.readyState !== WebSocket.CLOSED) ws.close(); }
- 
-  ws = new WebSocket(`${WS_BASE}/ws`);
+
+  // Версия, с которой реально загружена текущая страница (проставлена
+  // сервером в <meta name="app-version"> при отдаче index.html). Шлём её
+  // серверу при каждом коннекте/реконнекте — если после деплоя она
+  // разойдётся с тем, что лежит на диске сейчас, сервер пришлёт 'app_updated'.
+  const appVersion = document.getElementById('app-version-meta')?.content || '';
+  ws = new WebSocket(`${WS_BASE}/ws${appVersion ? `?v=${encodeURIComponent(appVersion)}` : ''}`);
  
   ws.onopen = () => {
     _wsRetryDelay = 2000;
@@ -542,6 +591,7 @@ function connectWS() {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
 
+    if (msg.event === 'app_updated') { showAppUpdateBanner(); return; }
     if (msg.event === 'card_dragging') { _handleRemoteDrag(msg.payload); return; }
     if (msg.event === 'card_unassigned') {
       // Нас сняли с задачи — она больше не видна, убираем с доски.
@@ -1810,6 +1860,71 @@ function _initLightbox() {
     _revokePendingPreviews();
     lightboxItems = [];
   });
+
+  // Esc тоже закрывает <dialog> — событие 'cancel' отменяемо и стреляет
+  // до 'close'. Всегда гасим нативное закрытие и решаем сами, через общий
+  // guard (который умеет спросить пользователя про черновик комментария).
+  if (cardModal) cardModal.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    requestCloseCardModal();
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UNSAVED COMMENT DRAFT GUARD
+// ─────────────────────────────────────────────────────────────────────────────
+// Если пользователь начал писать комментарий, но не нажал «Отправить»,
+// закрытие или сохранение карточки без предупреждения похоронит текст.
+// Предупреждаем через собственный <dialog>, а не window.confirm() —
+// нативный confirm ненадёжен (может быть заблокирован окружением/браузером
+// и не даёт нормально координироваться с событиями <dialog>).
+let _commentWarningResolve = null;
+
+function _initCommentWarningModal() {
+  const dlg = document.getElementById('modal-comment-warning');
+  if (!dlg || dlg.dataset.wired) return;
+  dlg.dataset.wired = '1';
+
+  const settle = (result) => {
+    const resolve = _commentWarningResolve;
+    _commentWarningResolve = null;
+    if (resolve) resolve(result);
+  };
+
+  const btnCancel = document.getElementById('comment-warning-cancel');
+  const btnConfirm = document.getElementById('comment-warning-confirm');
+  if (btnCancel) btnCancel.addEventListener('click', () => { dlg.close(); settle(false); });
+  if (btnConfirm) btnConfirm.addEventListener('click', () => { dlg.close(); settle(true); });
+
+  // Esc или клик мимо этого окна — тоже считаем отказом (остаться и не терять текст).
+  dlg.addEventListener('cancel', () => settle(false));
+  dlg.addEventListener('close', () => settle(false));
+}
+
+function hasUnsavedCommentDraft() {
+  const input = document.getElementById('card-new-comment');
+  return !!(input && input.value.trim().length > 0);
+}
+
+function showCommentWarningDialog() {
+  return new Promise((resolve) => {
+    const dlg = document.getElementById('modal-comment-warning');
+    if (!dlg) { resolve(true); return; } // на случай отсутствия разметки — не блокируем пользователя
+    _initCommentWarningModal();
+    _commentWarningResolve = resolve;
+    dlg.showModal();
+  });
+}
+
+async function confirmDiscardCommentDraft() {
+  if (!hasUnsavedCommentDraft()) return true;
+  return await showCommentWarningDialog();
+}
+
+async function requestCloseCardModal() {
+  if (!(await confirmDiscardCommentDraft())) return;
+  const cardModal = document.getElementById('modal-card');
+  if (cardModal && cardModal.open) cardModal.close();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3166,6 +3281,7 @@ async function openEditCard(cardId) {
 
 let lastSubmitTime = 0;
 async function submitCard() {
+  if (!(await confirmDiscardCommentDraft())) return;
   if (currentFilterMode === 'archived') {
     toast.warn('В режиме архива редактирование недоступно');
     return;
@@ -4724,7 +4840,14 @@ document.addEventListener('click', (e) => {
   if (e.target.tagName !== 'DIALOG') return;
   const r = e.target.getBoundingClientRect();
   const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-  if (outside) e.target.close();
+  if (!outside) return;
+  // Карточку задачи закрываем через guard — он спросит про несохранённый
+  // комментарий. Остальные диалоги закрываются как раньше, напрямую.
+  if (e.target.id === 'modal-card') {
+    requestCloseCardModal();
+  } else {
+    e.target.close();
+  }
 });
 
 // Фильтры журнала: текст с задержкой, остальное сразу.

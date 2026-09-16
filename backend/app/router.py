@@ -4,6 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.manager import manager
 from app.core.logging import get_logger
 from app.core.deps import get_current_user_ws
+from app.core.version import get_app_version
 from app.db.session import AsyncSessionLocale
 from app.repositories.user_repo import UserRepository
 
@@ -14,9 +15,23 @@ router = APIRouter()
 async def websocke_enpoint(
     ws: WebSocket,
     user_id: str | None = Query(default=None),
+    v: str | None = Query(default=None),
 ):
     user = await get_current_user_ws(ws)
     await manager.connect(ws)
+
+    # Клиент присылает версию, с которой была загружена страница (см. <meta
+    # name="app-version"> и connectWS() в scripts.js). Если после деплоя на
+    # сервере лежит другой scripts.js — это разошедшаяся вкладка: сокет мог
+    # переподключиться после рестарта процесса, а сама страница ещё старая.
+    # Просто пушим 'app_updated', ничего не перезагружая за пользователя —
+    # решение показать тост с кнопкой оставляем фронту.
+    current_version = get_app_version()
+    if v and v != current_version:
+        await ws.send_text(json.dumps({
+            'event': 'app_updated',
+            'payload': {'version': current_version},
+        }))
 
     if user:
         manager.bind_user(str(user.user_id), ws, role=user.role.value)
