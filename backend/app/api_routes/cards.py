@@ -16,7 +16,7 @@ async def list_cards(
     assigned_to: uuid.UUID | None = Query(default=None),
     project_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    sort_by: str = Query('position', regex='^(position|priority|deadline)$'),
+    sort_by: str = Query('position', regex='^(position|priority|deadline|complexity)$'),
     current_user: User = Depends(get_current_user)
 ):
     return await CardService(db).get_all(

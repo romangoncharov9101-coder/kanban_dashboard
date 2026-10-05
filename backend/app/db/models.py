@@ -143,6 +143,35 @@ class CardPriority(str, enum.Enum):
     LOW = "LOW"
 
 
+class CardComplexity(str, enum.Enum):
+    """
+    Трудоёмкость задачи.
+
+    Приоритет отвечает на вопрос «насколько срочно», статус — «на каком
+    этапе», сложность — «насколько тяжело». У каждого уровня есть вес
+    в очках (см. COMPLEXITY_POINTS), чтобы считать нагрузку, а не только
+    раскрашивать карточки.
+
+    Поле необязательное: NULL = «не оценена». Подставлять значение по
+    умолчанию нельзя — иначе сводка нагрузки покажет ложные числа.
+    """
+    TRIVIAL = "TRIVIAL"   # элементарная: до часа, решение очевидно
+    EASY = "EASY"         # простая: до дня, без неизвестных
+    MEDIUM = "MEDIUM"     # средняя: несколько дней, подход понятен
+    HARD = "HARD"         # сложная: около недели, есть неизвестные
+    EXPERT = "EXPERT"     # экспертная: исследование и риски
+
+
+# Вес уровня сложности в очках (шкала Фибоначчи).
+COMPLEXITY_POINTS = {
+    CardComplexity.TRIVIAL: 1,
+    CardComplexity.EASY: 2,
+    CardComplexity.MEDIUM: 3,
+    CardComplexity.HARD: 5,
+    CardComplexity.EXPERT: 8,
+}
+
+
 class Card(Base):
     __tablename__ = 'cards'
 
@@ -180,6 +209,12 @@ class Card(Base):
         default=CardStatus.NOT_STARTED,
         nullable=False,
         server_default='NOT_STARTED',
+        index=True,
+    )
+    # Сложность (трудоёмкость). NULL — задача ещё не оценена.
+    complexity: Mapped[CardComplexity | None] = mapped_column(
+        pgEnum(CardComplexity, name='cardcomplexity'),
+        nullable=True,
         index=True,
     )
     comments: Mapped[list['Comment']] = relationship('Comment', back_populates='card', cascade='all, delete-orphan', lazy='selectin', passive_deletes=True)

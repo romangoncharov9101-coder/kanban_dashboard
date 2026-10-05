@@ -134,6 +134,15 @@ class CardPriority(str, Enum):
     LOW = "LOW"
 
 
+class CardComplexity(str, Enum):
+    """Трудоёмкость задачи. None в схемах = «не оценена»."""
+    TRIVIAL = "TRIVIAL"
+    EASY = "EASY"
+    MEDIUM = "MEDIUM"
+    HARD = "HARD"
+    EXPERT = "EXPERT"
+
+
 class CardStatus(str, Enum):
     NOT_STARTED = "NOT_STARTED"
     IN_PROGRESS = "IN_PROGRESS"
@@ -151,6 +160,7 @@ class CardCreate(BaseModel):
     deadline: datetime | None = None
     priority: CardPriority = CardPriority.LOW
     status: CardStatus = CardStatus.NOT_STARTED
+    complexity: CardComplexity | None = None
 
     @field_validator('title')
     @classmethod
@@ -194,6 +204,9 @@ class CardUpdate(BaseModel):
     deadline: datetime | None = None
     priority: CardPriority | None = None
     status: CardStatus | None = None
+    # None, присланный явно, означает «снять оценку» — поэтому
+    # в сервисе проверяется факт присылки поля, а не его значение.
+    complexity: CardComplexity | None = None
     is_archived: bool | None = None
 
     @field_validator('assignee_ids')
@@ -242,6 +255,7 @@ class CardOut(BaseModel):
     position: int
     priority: CardPriority
     status: CardStatus = CardStatus.NOT_STARTED
+    complexity: CardComplexity | None = None
     is_archived: bool
 
     created_at: datetime

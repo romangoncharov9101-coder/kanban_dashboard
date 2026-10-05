@@ -44,6 +44,38 @@ function _statusMeta(value) {
   return STATUS_META[value] || STATUS_META.NOT_STARTED;
 }
 
+// Сложность (трудоёмкость) задачи. Единственный источник подписей и
+// весов на фронте: из него строятся точки на карточке, кнопки в модалке
+// и сумма очков в шапке колонки. Пустое значение (null) = «не оценена».
+// cls — бейдж на карточке: один оттенок, насыщеннее с ростом сложности,
+// чтобы не спорить по цвету с приоритетом и статусом.
+const COMPLEXITY_META = {
+  TRIVIAL: { label: 'Элементарная', pts: 1, hint: 'до часа, решение очевидно',
+             cls: 'bg-white text-slate-500 border-slate-200' },
+  EASY:    { label: 'Простая',      pts: 2, hint: 'до дня, без неизвестных',
+             cls: 'bg-teal-50 text-teal-700 border-teal-200' },
+  MEDIUM:  { label: 'Средняя',      pts: 3, hint: 'несколько дней, подход понятен',
+             cls: 'bg-teal-100 text-teal-800 border-teal-300' },
+  HARD:    { label: 'Сложная',      pts: 5, hint: 'около недели, есть неизвестные',
+             cls: 'bg-teal-600 text-white border-teal-600' },
+  EXPERT:  { label: 'Экспертная',   pts: 8, hint: 'исследование и риски, лучше разбить на части',
+             cls: 'bg-teal-800 text-white border-teal-800' },
+};
+
+function _complexityPoints(value) {
+  return COMPLEXITY_META[value]?.pts || 0;
+}
+
+// Бейдж сложности на карточке — в том же стиле, что приоритет и статус.
+// Значок 🧩 отличает его от приоритета («Средний» / «Средняя»).
+// У неоценённой задачи бейджа нет, чтобы не шуметь на доске.
+function _complexityBadge(value) {
+  const m = COMPLEXITY_META[value];
+  if (!m) return '';
+  return `<span class="inline-flex items-center gap-0.5 w-fit px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${m.cls}"
+               title="Сложность: ${m.label}">🧩 ${m.label}</span>`;
+}
+
 // Статус двигает тот, кто над задачей работает: админ, автор задачи
 // и любой её исполнитель. Это шире, чем право править саму задачу.
 function canChangeStatus(card) {
@@ -1242,6 +1274,7 @@ function _renderCard(c) {
               <span class="inline-block w-fit px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${st.cls}">
                 ${st.short}
               </span>
+              ${_complexityBadge(c.complexity)}
             </div>
             <span class="font-semibold text-slate-800 text-[13px] leading-tight line-clamp-2"
                   title="${esc(c.title)}">${esc(c.title)}</span>
@@ -2271,6 +2304,13 @@ function getCardSorted() {
       return a.position - b.position;
     }
 
+    if (currentSortMode === 'complexity') {
+      // Тяжёлые сверху, неоценённые (вес 0) — в конце
+      const diff = _complexityPoints(b.complexity) - _complexityPoints(a.complexity);
+      if (diff !== 0) return diff;
+      return a.position - b.position;
+    }
+
     if (currentSortMode === 'deadline') {
       if (!a.deadline) return 1;
       if (!b.deadline) return -1;
@@ -2383,6 +2423,12 @@ function getCardFilter() {
         return card.status === 'REWORK';
       case 's-done':
         return card.status === 'DONE';
+    }
+
+    // Сложность: c-TRIVIAL … c-EXPERT, c-NONE — «не оценена»
+    if (currentFilterMode.startsWith('c-')) {
+      const value = COMPLEXITY_META[card.complexity] ? card.complexity : 'NONE';
+      return value === currentFilterMode.slice(2);
     }
 
     return true;
@@ -2976,6 +3022,41 @@ function _getStatusRadio() {
   return checked ? checked.value : 'NOT_STARTED';
 }
 
+// Кнопки сложности строятся из COMPLEXITY_META один раз, при первом
+// обращении: так подписи живут в одном месте, а не копируются в HTML.
+function _ensureComplexityGroup() {
+  const group = document.getElementById('card-complexity-group');
+  if (!group || group.dataset.built) return group;
+  const btn = (value, title, tip) => `
+    <label class="cursor-pointer min-w-0" title="${esc(tip)}">
+      <input type="radio" name="card-complexity" value="${value}" class="peer hidden">
+      <div class="h-full text-center py-1.5 px-1 rounded-lg border border-slate-200 text-[11px] font-medium leading-tight
+                  text-slate-600 peer-checked:bg-teal-50 peer-checked:border-teal-400
+                  peer-checked:text-teal-800 transition-all">
+        <span class="block truncate">${title}</span>
+      </div>
+    </label>`;
+  group.innerHTML = btn('', 'Не оценена', 'Сложность ещё не оценена')
+    + Object.entries(COMPLEXITY_META)
+        .map(([value, m]) => btn(value, m.label, m.hint)).join('');
+  group.dataset.built = '1';
+  return group;
+}
+
+function _setComplexityRadio(value) {
+  _ensureComplexityGroup();
+  const target = COMPLEXITY_META[value] ? value : '';
+  document.querySelectorAll('input[name="card-complexity"]').forEach(r => {
+    r.checked = r.value === target;
+  });
+}
+
+// null — «не оценена»: сервер принимает его как снятие оценки
+function _getComplexityRadio() {
+  const checked = document.querySelector('input[name="card-complexity"]:checked');
+  return checked && checked.value ? checked.value : null;
+}
+
 // Статус живёт по своим правилам: его меняет и исполнитель, который
 // саму задачу править не может. Поэтому в режиме «только комментарии»
 // блок статуса остаётся активным, а значение уходит отдельным запросом.
@@ -3031,6 +3112,14 @@ function _applyCardModalMode(opts = {}) {
   document.querySelectorAll('input[name="card-priority"]').forEach(r => {
     r.disabled = ro || commentOnly;
   });
+
+  // Сложность — часть условия задачи, как приоритет: правят автор и админ
+  _ensureComplexityGroup();
+  document.querySelectorAll('input[name="card-complexity"]').forEach(r => {
+    r.disabled = ro || commentOnly;
+  });
+  const complexityGroup = document.getElementById('card-complexity-group');
+  if (complexityGroup) complexityGroup.classList.toggle('opacity-60', ro || commentOnly);
 
   // Статус доступен шире остальных полей: автору, админу и исполнителям
   const statusAllowed = !ro && opts.canChangeStatus !== false;
@@ -3160,6 +3249,7 @@ async function openAddCard(colId) {
 
   const lowPriorityRadio = document.querySelector('input[name="card-priority"][value="LOW"]');
   if (lowPriorityRadio) lowPriorityRadio.checked = true;
+  _setComplexityRadio(null);
 
   const listContainer = document.getElementById('main-comments-section');
   listContainer.classList.add('hidden');
@@ -3223,6 +3313,7 @@ async function openEditCard(cardId) {
   const priority = card.priority || "LOW";
   const radioToSelect = document.querySelector(`input[name="card-priority"][value="${priority}"]`);
   if (radioToSelect) radioToSelect.checked = true;
+  _setComplexityRadio(card.complexity);
 
   setDeadlineValue(card.deadline || null);
   pendingFiles = [];
@@ -3347,10 +3438,19 @@ async function submitCard() {
     const priorityElement = document.querySelector('input[name="card-priority"]:checked');
     const priority = priorityElement ? priorityElement.value : 'LOW';
 
+    // Мягкое правило: экспертную задачу без описания сохранить можно,
+    // но стоит напомнить — исполнителю не от чего будет оттолкнуться.
+    const complexity = _getComplexityRadio();
+    if (complexity === 'EXPERT' && !desc &&
+        !confirm('Задача экспертной сложности без описания. Сохранить всё равно?')) {
+      return;
+    }
+
     const payload = {
       title,
       description: desc || null,
       status: _getStatusRadio(),
+      complexity,
       deadline,
       priority,
     };
@@ -4896,6 +4996,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const descEl = document.getElementById('card-desc-input');
       if (descEl) descEl.readOnly = false;
       document.querySelectorAll('input[name="card-priority"]').forEach(r => { r.disabled = false; });
+      document.querySelectorAll('input[name="card-complexity"]').forEach(r => { r.disabled = false; });
       const dropZone = document.getElementById('drop-zone');
       if (dropZone) dropZone.style.display = '';
       const commentInput = document.querySelector('#comments-section .relative.group');

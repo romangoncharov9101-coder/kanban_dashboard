@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update, func, delete, insert, or_
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Card, User, Attachment, CardPriority, CardStatus, Comment, card_assignees
+from app.db.models import Card, User, Attachment, CardPriority, CardStatus, CardComplexity, Comment, card_assignees
 
 
 class CardRepository:
@@ -129,6 +129,7 @@ class CardRepository:
             deadline: datetime = None,
             priority: CardPriority = CardPriority.LOW,
             status: 'CardStatus | None' = None,
+            complexity: 'CardComplexity | None' = None,
             is_archived: bool = False,
             assignees: list[User] | None = None,
             project_id: uuid.UUID | None = None,
@@ -144,6 +145,7 @@ class CardRepository:
             deadline=deadline,
             priority=priority,
             status=status or CardStatus.NOT_STARTED,
+            complexity=complexity,
             is_archived=is_archived,
             created_at=now,
             project_id=project_id,

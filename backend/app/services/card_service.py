@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import Attachment, Card, CardStatus, User, UserRole
+from app.db.models import COMPLEXITY_POINTS, Attachment, Card, CardComplexity, CardStatus, User, UserRole
 from app.db.schemas import (
     CardCreate, CardMoveRequest, CardOut, CardStatusUpdate, CardUpdate,
     CommentOut, EventType,
@@ -209,6 +209,25 @@ class CardService:
         except (ValueError, KeyError):
             return str(value)
 
+    COMPLEXITY_LABELS = {
+        CardComplexity.TRIVIAL: 'элементарная',
+        CardComplexity.EASY: 'простая',
+        CardComplexity.MEDIUM: 'средняя',
+        CardComplexity.HARD: 'сложная',
+        CardComplexity.EXPERT: 'экспертная',
+    }
+
+    @classmethod
+    def _complexity_label(cls, value) -> str:
+        """«сложная (5)» для журнала; None — «не оценена»."""
+        if value is None:
+            return 'не оценена'
+        try:
+            c = CardComplexity(value)
+        except ValueError:
+            return str(value)
+        return f'{cls.COMPLEXITY_LABELS[c]} ({COMPLEXITY_POINTS[c]})'
+
     #======================================================
     # Cards
     #======================================================
@@ -322,6 +341,7 @@ class CardService:
             assignees=assignees,
             project_id=col.project_id,
             status=data.status,
+            complexity=data.complexity,
         )
         out = CardOut.model_validate(card)
         payload = out.model_dump(mode='json')
@@ -351,18 +371,13 @@ class CardService:
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
 
-        sent_fields = data.model_fields_set
-
-        # Если пытаются изменить основные поля карточки (заголовок, описание, дедлайн, приоритет, колонка)
-        restricted_fields = {'title', 'description', 'deadline', 'priority', 'column_id'}
-        if sent_fields.intersection(restricted_fields):
-            self._assert_can_manage(card, actor) # Только Автор/Админ
-        else:
-            # Для остальных полей (например, исполнителей) достаточно быть хотя бы исполнителем/автором/админом
-            self._assert_can_view(card, actor)
-            if not (self._can_manage(card, actor) or card.is_assignee(actor.user_id)):
-                raise HTTPException(status_code=403, detail='Недостаточно прав для изменения задачи.')
-            
+        # Общее редактирование — только автор задачи или админ.
+        # Раньше здесь было ветвление «основные поля / остальные», но
+        # сразу за ним стояла безусловная проверка _assert_can_manage,
+        # так что вторая ветка никогда не срабатывала. Поведение не
+        # меняем: исполнитель двигает статус через PATCH /status, а не
+        # через эту форму (иначе он мог бы менять состав исполнителей
+        # и архивировать задачу).
         self._assert_can_manage(card, actor)
 
         updates: dict = {}
@@ -389,6 +404,12 @@ class CardService:
         if 'status' in sent_fields and data.status is not None and data.status != card.status:
             updates['status'] = data.status
             log_details.append(f'статус → {self._status_label(data.status)}')
+
+        # Сложность: явный null допустим — это «снять оценку».
+        # Поэтому сравниваем как дедлайн, а не как приоритет.
+        if 'complexity' in sent_fields and data.complexity != card.complexity:
+            updates['complexity'] = data.complexity
+            log_details.append(f'сложность → {self._complexity_label(data.complexity)}')
 
         if 'priority' in sent_fields and data.priority is not None and data.priority != card.priority:
             updates['priority'] = data.priority
