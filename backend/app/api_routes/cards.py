@@ -3,7 +3,7 @@ from fastapi import APIRouter, Body, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.services.card_service import CardService
-from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardStatusUpdate, CardOut, AttachmentOut, CommentOut, CommentCreate
+from app.db.schemas import CardCreate, CardUpdate, CardMoveRequest, CardStatusUpdate, CardComplexityUpdate, CardOut, AttachmentOut, CommentOut, CommentCreate
 from app.core.deps import get_current_user, require_manager
 from app.db.models import User
 
@@ -46,6 +46,12 @@ async def delete_card(card_id: uuid.UUID, db: AsyncSession = Depends(get_db), cu
 async def change_card_status(card_id: uuid.UUID, body: CardStatusUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Стадию работы меняет исполнитель задачи, её автор или админ."""
     return await CardService(db).change_status(card_id, body, current_user)
+
+
+@router.patch('/{card_id}/complexity', response_model=CardOut)
+async def change_card_complexity(card_id: uuid.UUID, body: CardComplexityUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Сложность меняет исполнитель задачи, её автор или админ — как статус."""
+    return await CardService(db).change_complexity(card_id, body, current_user)
 
 
 @router.post('/{card_id}/move', response_model=CardOut)

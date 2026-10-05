@@ -239,6 +239,14 @@ class CardStatusUpdate(BaseModel):
     status: CardStatus
 
 
+class CardComplexityUpdate(BaseModel):
+    """
+    Смена сложности. Права те же, что у статуса: исполнитель задачи,
+    её автор или админ. None — снять оценку («не оценена»).
+    """
+    complexity: CardComplexity | None = None
+
+
 class CardMoveRequest(BaseModel):
     target_column_id: UUID
     target_position: int = Field(..., ge=0)

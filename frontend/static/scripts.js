@@ -86,6 +86,12 @@ function canChangeStatus(card) {
   return currentUser.role === 'TEAM_LEAD' && String(card.created_by) === meId;
 }
 
+// Сложность меняют те же, кто двигает статус: админ, автор-постановщик
+// и любой исполнитель задачи — он лучше всех знает реальную трудоёмкость.
+function canChangeComplexity(card) {
+  return canChangeStatus(card);
+}
+
 function isJournalView() {
   return !!currentProject && String(currentProject.id) === JOURNAL_ID;
 }
@@ -3057,6 +3063,26 @@ function _getComplexityRadio() {
   return checked && checked.value ? checked.value : null;
 }
 
+// Сложность, как и статус, исполнитель меняет без права править задачу:
+// в режиме «только комментарии» значение уходит отдельным запросом сразу.
+async function onComplexityPicked() {
+  const cardId = document.getElementById('card-edit-id').value;
+  if (!cardId) return;                  // новая задача — уйдёт вместе с формой
+
+  const card = findCardById(cardId);
+  if (!canChangeComplexity(card)) return;
+  if (!cardModalCommentOnly) return;    // в полном режиме сохранится по «Сохранить»
+
+  const picked = _getComplexityRadio();
+  const result = await api('PATCH', `/cards/${cardId}/complexity`, { complexity: picked });
+  if (!result) {
+    _setComplexityRadio(card ? card.complexity : null);   // откат
+    return;
+  }
+  if (card) card.complexity = result.complexity;
+  toast.success(`Сложность: ${COMPLEXITY_META[result.complexity]?.label || 'не оценена'}`);
+}
+
 // Статус живёт по своим правилам: его меняет и исполнитель, который
 // саму задачу править не может. Поэтому в режиме «только комментарии»
 // блок статуса остаётся активным, а значение уходит отдельным запросом.
@@ -3113,13 +3139,16 @@ function _applyCardModalMode(opts = {}) {
     r.disabled = ro || commentOnly;
   });
 
-  // Сложность — часть условия задачи, как приоритет: правят автор и админ
+  // Сложность доступна так же широко, как статус: автору, админу и исполнителям
   _ensureComplexityGroup();
+  const complexityAllowed = !ro && opts.canChangeComplexity !== false;
   document.querySelectorAll('input[name="card-complexity"]').forEach(r => {
-    r.disabled = ro || commentOnly;
+    r.disabled = !complexityAllowed;
   });
   const complexityGroup = document.getElementById('card-complexity-group');
-  if (complexityGroup) complexityGroup.classList.toggle('opacity-60', ro || commentOnly);
+  if (complexityGroup) complexityGroup.classList.toggle('opacity-50', !complexityAllowed);
+  const complexityHint = document.getElementById('card-complexity-hint');
+  if (complexityHint) complexityHint.style.display = (complexityAllowed && commentOnly) ? '' : 'none';
 
   // Статус доступен шире остальных полей: автору, админу и исполнителям
   const statusAllowed = !ro && opts.canChangeStatus !== false;
@@ -3303,6 +3332,7 @@ async function openEditCard(cardId) {
     hideAttachments: isArchived,
     hideComments: isArchived,
     canChangeStatus: canChangeStatus(card),
+    canChangeComplexity: canChangeComplexity(card),
     canEditAttachments: canEditAttachments(card),
     lockAssignees: ownPersonalCard,
   });

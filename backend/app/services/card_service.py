@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.models import COMPLEXITY_POINTS, Attachment, Card, CardComplexity, CardStatus, User, UserRole
 from app.db.schemas import (
-    CardCreate, CardMoveRequest, CardOut, CardStatusUpdate, CardUpdate,
+    CardComplexityUpdate, CardCreate, CardMoveRequest, CardOut, CardStatusUpdate, CardUpdate,
     CommentOut, EventType,
 )
 from app.manager import manager
@@ -722,6 +722,51 @@ class CardService:
         await manager.publish('card_updated', str(card.id), payload, audience=self._audience(card))
         await self.session.commit()
         logger.info(f'Card {card_id} status: {old_label} -> {new_label} by {actor.username}')
+        return out
+
+    async def change_complexity(self, card_id: uuid.UUID, data: CardComplexityUpdate, actor: User) -> CardOut:
+        """
+        Смена сложности — отдельно от общего редактирования задачи.
+
+        Права как у статуса (_can_change_status): исполнитель лучше всех
+        знает реальную трудоёмкость, поэтому может её переоценить, не
+        получая права переписывать само условие задачи.
+        """
+        card = await self.repo.get_by_id(card_id)
+        if not card:
+            raise HTTPException(status_code=404, detail='Карточка не найдена.')
+
+        self._assert_can_view(card, actor)
+        if not self._can_change_status(card, actor):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail='Менять сложность может исполнитель задачи, её автор или администратор.',
+            )
+
+        if card.complexity == data.complexity:
+            return CardOut.model_validate(card)
+
+        old_label = self._complexity_label(card.complexity)
+        new_label = self._complexity_label(data.complexity)
+
+        card = await self.repo.update(card, complexity=data.complexity)
+        out = CardOut.model_validate(card)
+        payload = out.model_dump(mode='json')
+
+        # Отдельный тип события не заводим (это потребовало бы правки
+        # enum в БД): изменение сложности — правка задачи.
+        await self.event_repo.create(
+            event_type=EventType.CARD_EDITED,
+            message=f'Задача «{card.title}»: сложность «{old_label}» → «{new_label}»',
+            card_id=card.id,
+            actor=actor,
+            payload=payload,
+            **(await self._card_ctx(card)),
+        )
+
+        await manager.publish('card_updated', str(card.id), payload, audience=self._audience(card))
+        await self.session.commit()
+        logger.info(f'Card {card_id} complexity: {old_label} -> {new_label} by {actor.username}')
         return out
 
     async def archive(self, card_id: uuid.UUID, actor: User) -> CardOut:

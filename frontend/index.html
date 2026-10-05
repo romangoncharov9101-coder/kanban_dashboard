@@ -804,7 +804,10 @@
 
         <!-- Сложность: кнопки строятся в scripts.js из COMPLEXITY_META -->
         <label class="block text-xs font-medium text-slate-500 mb-1 mt-4 uppercase tracking-wide">Сложность</label>
-        <div id="card-complexity-group" class="grid grid-cols-3 gap-1.5"></div>
+        <div id="card-complexity-group" class="grid grid-cols-3 gap-1.5" onchange="onComplexityPicked()"></div>
+        <p id="card-complexity-hint" class="text-[10px] text-slate-400 mt-1" style="display:none">
+          Сложность сохраняется сразу при выборе
+        </p>
       </div>
  
       <!-- Assignees (несколько исполнителей) -->
