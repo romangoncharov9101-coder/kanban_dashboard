@@ -10,7 +10,6 @@ class UserRole(str, Enum):
     ADMIN = "ADMIN"
     TEAM_LEAD = "TEAM_LEAD"
     USER = "USER"
-    PROJECT_MANAGER = "PROJECT_MANAGER"
 
 
 # Управляющие и невидимые символы в названиях недопустимы — они ломают
@@ -310,7 +309,7 @@ class ProjectCreate(BaseModel):
     owner_ids: list[UUID] = Field(default_factory=list, max_length=20)
     # Ответственные исполнители проекта
     member_ids: list[UUID] = Field(default_factory=list, max_length=50)
-    # Руководители проекта (роль пользователя PROJECT_MANAGER)
+    # Руководители проекта (назначение в проекте, отдельной роли нет)
     manager_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
     @field_validator('name')

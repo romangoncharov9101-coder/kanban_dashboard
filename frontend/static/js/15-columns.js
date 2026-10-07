@@ -18,7 +18,7 @@ function _initBoardSortable() {
     ghostClass: 'col-ghost',
     dragClass: 'col-drag',
     chosenClass: 'col-chosen',
-    disabled: !currentUser || !isManager(),
+    disabled: !currentUser || !canLeadBoard(),
     forceFallback: true,
     fallbackClass: 'col-drag',
     fallbackOnBody: true,
@@ -44,7 +44,7 @@ function _initBoardSortable() {
     async onEnd(evt) {
       isDragging = false;
       document.body.classList.remove('dragging-active');
-      if (!currentUser || !isManager() || evt.oldIndex === evt.newIndex) return;
+      if (!currentUser || !canLeadBoard() || evt.oldIndex === evt.newIndex) return;
  
       const colId  = evt.item.dataset.columnId;
       const newPos = evt.newIndex;
@@ -163,7 +163,7 @@ function _initCardSortable(columnId) {
 // COLUMN ACTIONS
 // ─────────────────────────────────────────────────────────────────────────────
 function openAddColumn() {
-  if (!isManager()) return toast.warn('Создавать категории может админ, постановщик или руководитель');
+  if (!canLeadBoard()) return toast.warn('Создавать категории может админ, постановщик или руководитель проекта');
   if (!currentProject) return toast.warn('Сначала выберите проект');
   if (!currentProject.can_manage) return toast.warn('Вы не отвечаете за этот проект');
   const chk = document.getElementById('new-col-user-movable');
@@ -257,7 +257,7 @@ function _updateCreateIcon(colId, isCreatable) {
 }
  
 async function deleteColumn(id) {
-  if (!isManager()) return toast.warn('Недостаточно прав');
+  if (!canLeadBoard()) return toast.warn('Недостаточно прав');
   if (!confirm('Удалить категорию? (Она должна быть пустой)')) return;
   await api('DELETE', `/columns/${id}`);
 }

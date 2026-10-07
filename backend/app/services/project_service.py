@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import EventType, Project, User, UserRole
+from app.db.models import EventType, Project, ProjectRole, User, UserRole
 from app.db.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from app.manager import manager
 from app.repositories.column_repo import ColumnRepository
@@ -23,9 +23,9 @@ class ProjectService:
       ADMIN     — всё дерево.
       TEAM_LEAD — проекты, где он ответственный, вместе с подпроектами,
                   плюс те, где у него есть свои задачи или назначения.
-      PROJECT_MANAGER — проекты, где он руководитель, вместе с подпроектами
-                  (если руководит корневым), плюс те, где у него есть свои
-                  задачи или назначения.
+      Руководитель (назначение в проекте, не роль) дополнительно видит
+                  проекты, где он руководитель, вместе с подпроектами,
+                  если руководит корневым.
       USER      — только проекты, где ему назначена хотя бы одна задача.
     """
 
@@ -53,12 +53,13 @@ class ProjectService:
             for pid in list(owned):
                 ids.update(await self.repo.get_children_ids(pid))
 
-        if viewer.role is UserRole.PROJECT_MANAGER:
-            managed = await self.repo.get_managed_project_ids(viewer.user_id)
-            ids.update(managed)
-            # Руководитель всего проекта руководит и его подпроектами.
-            for pid in list(managed):
-                ids.update(await self.repo.get_children_ids(pid))
+        # Руководителем проекта назначают в настройках проекта человека
+        # с любой ролью, кроме админа. Руководитель всего проекта
+        # руководит и его подпроектами.
+        managed = await self.repo.get_managed_project_ids(viewer.user_id)
+        ids.update(managed)
+        for pid in list(managed):
+            ids.update(await self.repo.get_children_ids(pid))
         # Ответственный исполнитель видит проект целиком, даже пока
         # ему не назначили ни одной задачи.
         # Ответственность не наследуется вниз: подпроекты родительского
@@ -93,13 +94,13 @@ class ProjectService:
         """
         if user.role is UserRole.ADMIN:
             return True
+        # Руководитель ведёт доску там, где назначен, а руководитель
+        # корневого проекта — ещё и доски всех его подпроектов.
+        # Это назначение в проекте и от роли пользователя не зависит.
+        owned = set(await self.repo.get_managed_project_ids(user.user_id))
         if user.role is UserRole.TEAM_LEAD:
-            owned = set(await self.repo.get_owned_project_ids(user.user_id))
-        elif user.role is UserRole.PROJECT_MANAGER:
-            # Руководитель ведёт доску там, где назначен, а руководитель
-            # корневого проекта — ещё и доски всех его подпроектов.
-            owned = set(await self.repo.get_managed_project_ids(user.user_id))
-        else:
+            owned.update(await self.repo.get_owned_project_ids(user.user_id))
+        if not owned:
             return False
 
         if project.id in owned:
@@ -112,8 +113,6 @@ class ProjectService:
         Только такой руководитель может назначать исполнителями
         руководителей подпроектов.
         """
-        if user.role is not UserRole.PROJECT_MANAGER:
-            return False
         root_id = project.parent_id or project.id
         return root_id in set(await self.repo.get_managed_project_ids(user.user_id))
 
@@ -121,16 +120,25 @@ class ProjectService:
         """
         Кого актёр вправе назначать исполнителем задачи в этом проекте.
         None — ограничений нет (админ и постановщик работают как раньше).
+        Остальных ограничивает назначение в проекте: руководитель — пулом
+        ниже, все прочие заводят только личные задачи (исполнитель — сам).
 
-        Руководитель назначает только постановщиков и ответственных того
+        Руководитель назначает себя, постановщиков и ответственных того
         узла, где лежит задача (постановщики корня действуют и в подпроектах). Руководитель всего проекта дополнительно
         может назначать руководителей подпроектов: на доске корня — любого
         из подпроектов, на доске подпроекта — руководителей этого подпроекта.
         """
-        if actor.role is not UserRole.PROJECT_MANAGER:
+        if actor.role in (UserRole.ADMIN, UserRole.TEAM_LEAD):
             return None
 
-        ids: set[uuid.UUID] = set(await self.repo.get_owner_ids(project.id))
+        # Там, где он не руководитель (например, ответственный), человек
+        # заводит только личные задачи — исполнитель в них он сам.
+        if not await self.can_manage_project(project, actor):
+            return {actor.user_id}
+
+        # Руководитель может поставить задачу и на самого себя.
+        ids: set[uuid.UUID] = {actor.user_id}
+        ids.update(await self.repo.get_owner_ids(project.id))
         ids.update(await self.repo.get_member_ids(project.id))
         # Постановщик корневого проекта ведёт и все его подпроекты,
         # поэтому в подпроекте он тоже считается постановщиком.
@@ -318,13 +326,17 @@ class ProjectService:
             created_by=actor.user_id,
         )
 
-        if owners:
-            await self.repo.set_owners(project, [u.user_id for u in owners])
-        if members:
-            await self.repo.set_members(project, [u.user_id for u in members])
-        if managers:
-            await self.repo.set_managers(project, [u.user_id for u in managers])
+        self._assert_single_role({
+            'постановщиком': [u.user_id for u in owners],
+            'ответственным': [u.user_id for u in members],
+            'руководителем': [u.user_id for u in managers],
+        }, owners + members + managers)
         if owners or members or managers:
+            await self.repo.replace_participants(project, {
+                ProjectRole.OWNER: [u.user_id for u in owners],
+                ProjectRole.MEMBER: [u.user_id for u in members],
+                ProjectRole.MANAGER: [u.user_id for u in managers],
+            })
             project = await self.repo.get_by_id(project.id)
 
         out = self._node(project, can_manage=True)
@@ -362,21 +374,44 @@ class ProjectService:
         if data.is_archived is not None and data.is_archived != project.is_archived:
             updates['is_archived'] = data.is_archived
 
-        owners_changed = False
+        by_role: dict[ProjectRole, list[uuid.UUID]] = {}
+        resolved: list[User] = []
         if data.owner_ids is not None:
             owners = await self._resolve_owners(data.owner_ids)
-            await self.repo.set_owners(project, [u.user_id for u in owners])
-            owners_changed = True
+            by_role[ProjectRole.OWNER] = [u.user_id for u in owners]
+            resolved += owners
 
         if data.member_ids is not None:
             members = await self._resolve_members(data.member_ids)
-            await self.repo.set_members(project, [u.user_id for u in members])
-            owners_changed = True
+            by_role[ProjectRole.MEMBER] = [u.user_id for u in members]
+            resolved += members
 
         if data.manager_ids is not None:
             managers = await self._resolve_managers(data.manager_ids)
-            await self.repo.set_managers(project, [u.user_id for u in managers])
-            owners_changed = True
+            by_role[ProjectRole.MANAGER] = [u.user_id for u in managers]
+            resolved += managers
+
+        owners_changed = bool(by_role)
+        if owners_changed:
+            # Роль, которую не прислали, остаётся как есть — сверяем с ней
+            current = {
+                ProjectRole.OWNER: list(project.owners),
+                ProjectRole.MEMBER: list(project.members),
+                ProjectRole.MANAGER: list(project.managers),
+            }
+            final = {}
+            for role, users in current.items():
+                if role in by_role:
+                    final[role] = by_role[role]
+                else:
+                    final[role] = [u.user_id for u in users]
+                    resolved += users
+            self._assert_single_role({
+                'постановщиком': final[ProjectRole.OWNER],
+                'ответственным': final[ProjectRole.MEMBER],
+                'руководителем': final[ProjectRole.MANAGER],
+            }, resolved)
+            await self.repo.replace_participants(project, by_role)
 
         if updates:
             project = await self.repo.update(project, **updates)
@@ -467,8 +502,32 @@ class ProjectService:
             )
         return users
 
+    @staticmethod
+    def _assert_single_role(by_label: dict[str, list[uuid.UUID]], users: list[User]) -> None:
+        """
+        В одном проекте человек занимает одну роль (так устроен ключ
+        таблицы project_members). В разных проектах роли могут быть разными:
+        руководитель одного проекта — ответственный в другом.
+        """
+        seen: dict[uuid.UUID, str] = {}
+        clashes: list[str] = []
+        names = {u.user_id: u.username for u in users}
+        for label, ids in by_label.items():
+            for uid in ids:
+                if uid in seen and seen[uid] != label:
+                    clashes.append(f'{names.get(uid, uid)} ({seen[uid]} и {label})')
+                seen.setdefault(uid, label)
+        if clashes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail='В одном проекте у человека может быть только одна роль: ' + ', '.join(clashes),
+            )
+
     async def _resolve_managers(self, manager_ids: list[uuid.UUID]) -> list[User]:
-        """Руководителем проекта можно назначить только роль «Руководитель»."""
+        """
+        Руководитель — назначение в проекте, отдельной роли нет.
+        Назначить можно исполнителя или постановщика; админ и так ведёт всё.
+        """
         if not manager_ids:
             return []
         users = await self.user_repo.get_users_by_ids(manager_ids)
@@ -477,11 +536,11 @@ class ProjectService:
         if missing:
             raise HTTPException(status_code=404, detail=f'Пользователь не найден: {", ".join(missing)}')
 
-        bad = [u.username for u in users if u.role is not UserRole.PROJECT_MANAGER]
+        bad = [u.username for u in users if u.role is UserRole.ADMIN]
         if bad:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f'Руководителем можно назначить только пользователя с ролью «Руководитель»: {", ".join(bad)}',
+                detail=f'Администратор и так ведёт все проекты, руководителем его назначать не нужно: {", ".join(bad)}',
             )
         inactive = [u.username for u in users if not u.is_active]
         if inactive:

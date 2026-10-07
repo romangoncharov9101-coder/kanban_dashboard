@@ -94,8 +94,9 @@ class CardService:
             return True
         if card.is_assignee(user.user_id):
             return True
-        return (user.role in (UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER)
-                and str(card.created_by) == str(user.user_id))
+        # Автор задачи — постановщик или руководитель проекта (у личной
+        # задачи исполнителя автор и так её исполнитель).
+        return str(card.created_by) == str(user.user_id)
 
     def _assert_can_view(self, card: Card, user: User) -> None:
         if not self._can_view(card, user):
@@ -177,15 +178,28 @@ class CardService:
             )
         return users
 
+    async def _may_change_assignees(self, card: Card, actor: User) -> bool:
+        """
+        Менять состав исполнителей своей задачи может тот, кто ведёт доски:
+        админ и постановщик — как раньше, остальные — только в проекте,
+        которым руководят. Там, где человек ответственный, его задача
+        личная и состав у неё неизменен.
+        """
+        if actor.role in (UserRole.ADMIN, UserRole.TEAM_LEAD):
+            return True
+        from app.services.project_service import ProjectService
+        project = await self.project_repo.get_by_id(card.project_id)
+        return bool(project) and await ProjectService(self.session).can_manage_project(project, actor)
+
     async def _assert_assignable(
         self, project_id: uuid.UUID, actor: User, user_ids: set[uuid.UUID]
     ) -> None:
         """
-        Руководитель назначает исполнителями только постановщиков и
+        Руководитель назначает исполнителями себя, постановщиков и
         ответственных проекта (руководитель всего проекта — ещё и
-        руководителей подпроектов). Для остальных ролей ограничений нет.
+        руководителей подпроектов). У админа и постановщика ограничений нет.
         """
-        if actor.role is not UserRole.PROJECT_MANAGER or not user_ids:
+        if not user_ids:
             return
         from app.services.project_service import ProjectService
         project_service = ProjectService(self.session)
@@ -201,7 +215,7 @@ class CardService:
             names = ', '.join(sorted(u.username for u in users)) or ', '.join(str(i) for i in foreign)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=('Руководитель может назначать исполнителями только постановщиков '
+                detail=('Руководитель может назначать исполнителями только себя, постановщиков '
                         f'и ответственных проекта. Нельзя назначить: {names}'),
             )
 
@@ -322,10 +336,12 @@ class CardService:
 
         card_project = await project_service.assert_can_view(col.project_id, author)
 
-        if author.role is UserRole.ADMIN or await project_service.can_manage_project(
+        # Ведёт доску: админ, постановщик или руководитель этого проекта.
+        leads_board = author.role is UserRole.ADMIN or await project_service.can_manage_project(
             card_project, author
-        ):
-            pass  # админ и постановщик проекта заводят задачи как обычно
+        )
+        if leads_board:
+            pass  # заводят задачи как обычно
         elif col.is_user_creatable and await project_service.is_project_member(
             card_project, author
         ):
@@ -339,9 +355,11 @@ class CardService:
                 detail='В этой категории вы не можете создавать задачи.',
             )
 
-        if author.is_manager:
+        if leads_board:
             requested_ids = list(data.assignee_ids)
         else:
+            # Сюда попадает и руководитель, работающий в чужом проекте
+            # ответственным: там его задача — личная, как у исполнителя.
             # Личная задача исполнителя: состав жёстко равен автору.
             # Ни добавить коллегу, ни убрать себя он не может — иначе
             # задача уехала бы к тому, кто её не заводил.
@@ -441,8 +459,8 @@ class CardService:
         # Исполнители: полная замена списка
         assignees_changed = False
         if ('assignee_ids' in sent_fields and data.assignee_ids is not None
-                and not actor.is_manager
-                and set(data.assignee_ids) != old_assignee_ids):
+                and set(data.assignee_ids) != old_assignee_ids
+                and not await self._may_change_assignees(card, actor)):
             # Состав исполнителей личной задачи неизменен: её автор
             # остаётся единственным исполнителем.
             # Сравниваем со старым составом, а не просто с фактом присылки

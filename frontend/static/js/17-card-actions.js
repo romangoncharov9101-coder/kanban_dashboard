@@ -15,7 +15,10 @@ async function openAddCard(colId) {
   cardModalCommentOnly = false;
   selectedAssignees = [];
   await _loadAssigneePool(_col.project_id || currentProject?.id);
-  _applyCardModalMode({ lockAssignees: !isManager() });
+  // Доску ведут админ, постановщик и руководитель — но только свои проекты.
+  // Руководитель, который здесь лишь ответственный, заводит личную задачу.
+  const leadsBoard = !!currentProject?.can_manage;
+  _applyCardModalMode({ lockAssignees: !leadsBoard });
   await _fillAssigneeSelect();
   _renderAssigneeChips();
 
@@ -26,7 +29,7 @@ async function openAddCard(colId) {
   document.getElementById('card-desc-input').value = '';
   _setStatusRadio('NOT_STARTED');
 
-  if (currentUser && !isManager()) {
+  if (currentUser && !leadsBoard) {
     // Личная задача: исполнителем становится только автор, иначе
     // задача останется ничьей и пропадёт из его выдачи.
     selectedAssignees = [{ user_id: currentUser.user_id, username: currentUser.username }];
@@ -98,7 +101,11 @@ async function openEditCard(cardId) {
   document.getElementById('card-desc-input').value = card.description || '';
   _setStatusRadio(card.status);
   // Личная задача исполнителя: состав менять нельзя
-  const ownPersonalCard = !isManager() && String(card.created_by) === String(currentUser?.user_id);
+  // Руководитель в проекте, которым не руководит (там он ответственный), —
+  // такой же автор личной задачи, как исполнитель.
+  const isAuthor = String(card.created_by) === String(currentUser?.user_id);
+  const ownPersonalCard = isAuthor && !isManager()
+    && !_findProject(card.project_id)?.can_manage;
   _applyCardModalMode({
     hideAttachments: isArchived,
     hideComments: isArchived,
@@ -259,7 +266,7 @@ async function submitCard() {
     // Состав исполнителей отправляем только если пользователь вправе его
     // менять. Обычный сотрудник, редактирующий свою задачу, поля не видит,
     // и присылать его не должен — сервер отвечает на это 403.
-    if (isManager() || !editId) {
+    if (isManager() || !editId || !_assigneesLocked) {
       payload.assignee_ids = assigneeIds;
     }
 

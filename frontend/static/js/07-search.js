@@ -109,7 +109,7 @@ document.addEventListener('click', (e) => {
 function _renderColumn(col, colCards) {
   const ce = !!currentUser;
   // Категориями и задачами проекта распоряжается тот, кто за него отвечает
-  const canManage = ce && isManager() && !!currentProject?.can_manage;
+  const canManage = ce && !!currentProject?.can_manage;
   const isArchived = currentFilterMode === 'archived';
   const count = colCards.length;
   // Для исполнителя показываем, куда ему разрешено перетаскивать.

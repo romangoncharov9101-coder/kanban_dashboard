@@ -134,7 +134,7 @@ function renderBoard() {
 
   const btnAddCol = document.getElementById('btn-add-col');
   if (btnAddCol) {
-    const allowed = currentUser && isManager() && !isArchived && !!currentProject?.can_manage;
+    const allowed = currentUser && !isArchived && !!currentProject?.can_manage;
     btnAddCol.style.display = allowed ? '' : 'none';
   }
 

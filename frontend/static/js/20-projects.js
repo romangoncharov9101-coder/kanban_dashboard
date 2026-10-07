@@ -278,7 +278,7 @@ function _renderProjectHeader() {
   const canManageProject = !!(currentProject && currentProject.can_manage);
   const addColBtn = document.getElementById('btn-add-col');
   if (addColBtn) {
-    const allowed = currentUser && isManager() && canManageProject;
+    const allowed = currentUser && canManageProject;
     addColBtn.disabled = !allowed;
     addColBtn.style.display = allowed ? '' : 'none';
   }

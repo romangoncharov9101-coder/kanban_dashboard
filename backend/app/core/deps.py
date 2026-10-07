@@ -105,9 +105,8 @@ def require_roles(*roles: UserRole):
 # Только администратор: управление пользователями.
 require_admin = require_roles(UserRole.ADMIN)
 
-# Администратор, постановщик или руководитель: управление категориями.
-# В каких именно проектах — проверяет ProjectService.assert_can_manage.
-require_manager = require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER)
+# Администратор или тим-лидер: управление категориями и задачами.
+require_manager = require_roles(UserRole.ADMIN, UserRole.TEAM_LEAD)
 
 async def get_current_user_ws(ws) -> User | None:
     cookie_header: str = ws.headers.get('cookie', '')

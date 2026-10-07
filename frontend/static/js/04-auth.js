@@ -23,24 +23,26 @@ function validateName(value, maxLen, what) {
  
 // Самостоятельной регистрации нет: аккаунты заводит администратор.
 // Роли: ADMIN — управляет пользователями; TEAM_LEAD — ведёт доску;
-// PROJECT_MANAGER — руководитель: ведёт доску проектов, где назначен,
-// и ставит задачи только постановщикам и ответственным проекта;
+// Руководитель проекта — не роль, а назначение в настройках проекта:
+// права на доску приходят с сервера флагом currentProject.can_manage;
 // USER — видит только свои задачи и двигает их по разрешённым категориям.
 const ROLE_LABELS = {
   ADMIN:     { text: 'Админ',     cls: 'bg-rose-100 text-rose-700' },
   TEAM_LEAD: { text: 'Постановщик', cls: 'bg-violet-100 text-violet-700' },
   USER:      { text: 'Исполнитель', cls: 'bg-slate-100 text-slate-600' },
-  PROJECT_MANAGER: { text: 'Руководитель', cls: 'bg-amber-100 text-amber-700' },
 };
 
 function isAdmin()   { return currentUser?.role === 'ADMIN'; }
-// «Ведёт доску» — может создавать колонки и задачи. В каких проектах
-// именно, говорит сервер флагом currentProject.can_manage.
-function isManager() {
-  return currentUser?.role === 'ADMIN' || currentUser?.role === 'TEAM_LEAD'
-    || currentUser?.role === 'PROJECT_MANAGER';
-}
-function isProjectManager() { return currentUser?.role === 'PROJECT_MANAGER'; }
+function isManager() { return currentUser?.role === 'ADMIN' || currentUser?.role === 'TEAM_LEAD'; }
+
+// Ведёт ли пользователь доску открытого проекта: админ, постановщик или
+// руководитель проекта. Руководителем назначают в настройках проекта
+// человека с любой ролью, поэтому опираемся на флаг сервера can_manage.
+function canLeadBoard() { return isManager() || !!currentProject?.can_manage; }
+
+// Ограничен ли выбор исполнителей: у админа и постановщика ограничений нет,
+// у остальных его задаёт назначение в проекте (см. _loadAssigneePool).
+function hasFreeAssigneeChoice() { return isManager(); }
 
 // Право менять саму задачу принадлежит админу и АВТОРУ задачи —
 // независимо от его роли. Обычный сотрудник, заведший себе задачу,
@@ -88,7 +90,8 @@ function isForeignBoardCard(card) {
 function canCreateInColumn(col) {
   if (!currentUser || !col) return false;
   if (isAdmin()) return true;
-  if (isManager() && currentProject?.can_manage) return true;
+  // Админ, постановщик или руководитель этого проекта
+  if (currentProject?.can_manage) return true;
   // Заводить задачи может только ответственный именно этого проекта
   // или подпроекта. Ответственный за родителя здесь посторонний,
   // даже если категория открыта для создания.
@@ -217,4 +220,3 @@ function _uiLoggedOut() {
 
   renderBoard();
 }
- 

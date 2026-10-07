@@ -852,7 +852,7 @@
         <option value="">Добавить руководителя…</option>
       </select>
       <p id="project-managers-hint" class="text-[10px] text-slate-400 mb-4">
-        Руководитель создаёт колонки и задачи и назначает исполнителями постановщиков и ответственных.
+        Руководитель создаёт колонки и задачи и назначает исполнителями себя, постановщиков и ответственных.
       </p>
     </div>
 
@@ -886,7 +886,7 @@
      MODAL: Управление пользователями (только ADMIN)
 ════════════════════════════════════════════════════════════════════════ -->
 <dialog id="modal-admin">
-  <div class="w-full sm:w-[760px] max-h-[90vh] overflow-y-auto thin-scroll">
+  <div class="w-full sm:w-[720px] max-h-[90vh] overflow-y-auto thin-scroll">
     <div class="flex justify-between items-center px-6 pt-5 pb-3 border-b border-slate-100">
       <h3 class="font-semibold text-slate-800 text-base">Пользователи</h3>
       <button onclick="document.getElementById('modal-admin').close()"
@@ -906,7 +906,6 @@
             class="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">
             <option value="USER">Пользователь</option>
             <option value="TEAM_LEAD">Постановщик задач</option>
-            <option value="PROJECT_MANAGER">Руководитель проекта</option>
             <option value="ADMIN">Администратор</option>
           </select>
           <button onclick="submitNewUser()"

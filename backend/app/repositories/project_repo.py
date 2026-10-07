@@ -143,6 +143,54 @@ class ProjectRepository:
             # Связь меняется core-запросами, ORM об этом не знает.
             self.session.expire(project, ['owners', 'members', 'managers'])
 
+    async def replace_participants(
+        self, project: Project, by_role: dict[ProjectRole, list[uuid.UUID]]
+    ) -> None:
+        """
+        Меняет состав сразу нескольких ролей за один проход.
+
+        У таблицы связи ключ (project_id, user_id): человек занимает в
+        проекте одну роль. Если за одно сохранение его переводят, скажем,
+        из руководителей в ответственные, сначала нужно удалить старую
+        строку и только потом вставить новую — иначе INSERT упрётся в ключ.
+        Поэтому здесь все удаления выполняются раньше всех вставок.
+        """
+        plan = []
+        for role, user_ids in by_role.items():
+            current = set(await self.get_participant_ids(project.id, role))
+            target = set(user_ids)
+            plan.append((role, current - target, target - current))
+
+        changed = False
+        for role, to_remove, _ in plan:
+            if to_remove:
+                changed = True
+                await self.session.execute(
+                    delete(project_members).where(
+                        project_members.c.project_id == project.id,
+                        project_members.c.role_in_project == role,
+                        project_members.c.user_id.in_(to_remove),
+                    )
+                )
+        for role, _, to_add in plan:
+            if to_add:
+                changed = True
+                await self.session.execute(
+                    insert(project_members),
+                    [
+                        {
+                            'project_id': project.id,
+                            'user_id': uid,
+                            'role_in_project': role,
+                            'added_at': datetime.now(timezone.utc),
+                        }
+                        for uid in to_add
+                    ],
+                )
+        await self.session.flush()
+        if changed:
+            self.session.expire(project, ['owners', 'members', 'managers'])
+
     async def set_owners(self, project: Project, user_ids: list[uuid.UUID]) -> None:
         await self.set_participants(project, user_ids, ProjectRole.OWNER)
 
@@ -241,8 +289,10 @@ class ProjectRepository:
                 card_assignees.c.user_id == viewer.user_id
             )
             cond = Card.id.in_(assigned)
-            if viewer.role in (UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER):
-                cond = or_(cond, Card.created_by == viewer.user_id)
+            # Созданное собой видит любая роль — как и в выдаче карточек
+            # (include_own_created). У исполнителя это личные задачи,
+            # у руководителя проекта — поставленные им.
+            cond = or_(cond, Card.created_by == viewer.user_id)
             q = q.where(cond)
 
         result = await self.session.execute(q.group_by(Card.project_id))

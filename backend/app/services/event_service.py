@@ -30,7 +30,10 @@ class EventService:
         card = await self.card_repo.get_by_id(card_id)
         if not card:
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
-        if not viewer.is_manager and not card.is_assignee(viewer.user_id):
+        # Автор задачи видит её историю, даже не будучи исполнителем
+        # (руководитель проекта, поставивший задачу другим).
+        if (not viewer.is_manager and not card.is_assignee(viewer.user_id)
+                and str(card.created_by) != str(viewer.user_id)):
             raise HTTPException(status_code=404, detail='Карточка не найдена.')
 
         events = await self.repo.get_by_card(card_id, limit=limit, last_id=last_id)

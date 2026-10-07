@@ -16,7 +16,6 @@ ROLE_LABELS = {
     'ADMIN': 'администратор',
     'TEAM_LEAD': 'постановщик',
     'USER': 'исполнитель',
-    'PROJECT_MANAGER': 'руководитель',
 }
 
 class AdminService:
@@ -133,4 +132,4 @@ class AdminService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail='Это последний администратор - операция заблокирована.'
-            )
+            ) 

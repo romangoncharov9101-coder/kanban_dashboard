@@ -26,7 +26,7 @@ async def get_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_db),
 async def get_assignable(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Кого можно назначать исполнителем задач этого проекта.
-    Ограничение действует для руководителя проекта: только постановщики
+    Ограничение действует для руководителя проекта: он сам, постановщики
     и ответственные (а руководителю всего проекта — ещё и руководители
     подпроектов).
     """

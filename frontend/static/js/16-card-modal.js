@@ -17,7 +17,6 @@ const ROLE_CHIP = {
   ADMIN:     'bg-rose-50 text-rose-600',
   TEAM_LEAD: 'bg-violet-50 text-violet-600',
   USER:      'bg-slate-100 text-slate-500',
-  PROJECT_MANAGER: 'bg-amber-50 text-amber-700',
 };
 
 // Стабильный цвет аватара по имени, чтобы люди различались взглядом
@@ -47,7 +46,7 @@ async function _fillAssigneeSelect() {
 // идёт на сервере — здесь только чтобы не предлагать заведомо запрещённых.
 async function _loadAssigneePool(projectId) {
   _assigneePool = null;
-  if (!isProjectManager() || !projectId) return;
+  if (hasFreeAssigneeChoice() || !projectId) return;
   const data = await api('GET', `/projects/${projectId}/assignable`, undefined, true);
   if (data && data.restricted) {
     _assigneePool = new Set((data.users || []).map(u => String(u.user_id)));
@@ -336,7 +335,7 @@ function _applyCardModalMode(opts = {}) {
   if (assignHint) {
     assignHint.style.display = lockedAssignees ? 'none' : '';
     assignHint.textContent = _assigneePool
-      ? 'Руководитель назначает исполнителями постановщиков и ответственных проекта.'
+      ? 'Руководитель назначает исполнителями себя, постановщиков и ответственных проекта.'
       : 'Можно назначить нескольких человек. Каждый увидит задачу у себя на доске.';
   }
   closeAssigneePicker();
@@ -395,7 +394,7 @@ function _applyRoleToUI() {
 
   const addColBtn = document.getElementById('btn-add-col');
   if (addColBtn) {
-    const allowed = currentUser && isManager() && !!currentProject?.can_manage;
+    const allowed = currentUser && !!currentProject?.can_manage;
     addColBtn.disabled = !allowed;
     addColBtn.style.display = allowed ? '' : 'none';
   }

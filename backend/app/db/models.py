@@ -29,19 +29,13 @@ class UserRole(str, enum.Enum):
                  созданные админом, ему не видны.
     USER       — исполнитель. Видит только назначенные ему задачи, двигает их
                  между разрешёнными категориями, комментирует, шлёт файлы.
-    PROJECT_MANAGER — руководитель. Сам по себе прав на проекты не имеет:
-                 админ назначает его руководителем конкретного проекта или
-                 подпроекта (ProjectRole.MANAGER). Там он создаёт колонки,
-                 заводит задачи в любых колонках и назначает исполнителями
-                 только постановщиков и ответственных этого проекта.
-                 Руководитель корневого проекта дополнительно может назначать
-                 исполнителями руководителей его подпроектов.
-                 Видимость задач — как у постановщика: свои и назначенные.
+
+    Руководитель проекта — не роль пользователя, а назначение в проекте
+    (ProjectRole.MANAGER), см. Project.managers.
     """
     ADMIN = "ADMIN"
     TEAM_LEAD = "TEAM_LEAD"
     USER = "USER"
-    PROJECT_MANAGER = "PROJECT_MANAGER"
 
 
 #======================================================
@@ -80,12 +74,13 @@ class User(Base):
     @property
     def is_manager(self) -> bool:
         """
-        ADMIN, TEAM_LEAD или PROJECT_MANAGER — те, кто может создавать
-        категории и задачи (в каких именно проектах — решает ProjectService).
+        ADMIN или TEAM_LEAD — те, кто может создавать категории и задачи.
+        Руководитель проекта (назначение в проекте) сюда не входит: его
+        права проверяет ProjectService.can_manage_project.
         Внимание: это НЕ право видеть или менять конкретную задачу —
         для этого есть CardService._can_view / _can_manage.
         """
-        return self.role in (UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER)
+        return self.role in (UserRole.ADMIN, UserRole.TEAM_LEAD)
 
     def __repr__(self) -> str:
         return f'<User(username={self.username}, role={self.role})>'
@@ -378,7 +373,7 @@ class ProjectRole(str, enum.Enum):
     """Роль пользователя внутри конкретного проекта."""
     OWNER = "OWNER"      # постановщик, отвечающий за проект
     MEMBER = "MEMBER"    # ответственный исполнитель, работающий в проекте
-    MANAGER = "MANAGER"  # руководитель проекта (глобальная роль PROJECT_MANAGER)
+    MANAGER = "MANAGER"  # руководитель проекта (исполнитель или постановщик)
 
 
 project_members = Table(

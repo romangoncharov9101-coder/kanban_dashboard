@@ -59,7 +59,6 @@ function _renderAdminUsers() {
           class="border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white disabled:opacity-40 disabled:cursor-not-allowed">
           <option value="USER"      ${u.role === 'USER' ? 'selected' : ''}>Пользователь</option>
           <option value="TEAM_LEAD" ${u.role === 'TEAM_LEAD' ? 'selected' : ''}>Тим лидер</option>
-          <option value="PROJECT_MANAGER" ${u.role === 'PROJECT_MANAGER' ? 'selected' : ''}>Руководитель</option>
           <option value="ADMIN"     ${u.role === 'ADMIN' ? 'selected' : ''}>Администратор</option>
         </select>
 

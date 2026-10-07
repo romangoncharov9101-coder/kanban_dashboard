@@ -49,8 +49,8 @@ async function openProjectModal(projectId, parentId) {
   if (managersHint) {
     const isSub = !!(parentId || existing?.parent_id);
     managersHint.textContent = isSub
-      ? 'Руководитель подпроекта создаёт в нём колонки и задачи и назначает исполнителями постановщиков и ответственных.'
-      : 'Руководитель проекта ведёт проект и все подпроекты: создаёт колонки и задачи, назначает исполнителями постановщиков, ответственных и руководителей подпроектов.';
+      ? 'Руководитель подпроекта создаёт в нём колонки и задачи и назначает исполнителями себя, постановщиков и ответственных.'
+      : 'Руководитель проекта ведёт проект и все подпроекты: создаёт колонки и задачи, назначает исполнителями себя, постановщиков, ответственных и руководителей подпроектов.';
   }
   await _fillOwnerOptions();
   await _fillMemberOptions();
@@ -70,6 +70,8 @@ async function _fillOwnerOptions() {
   sel.innerHTML = '<option value="">Добавить постановщика…</option>' +
     eligible
       .filter(u => !selectedOwners.some(o => String(o.user_id) === String(u.user_id)))
+      // В одном проекте у человека одна роль
+      .filter(u => !selectedManagers.some(m => String(m.user_id) === String(u.user_id)))
       .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
       .join('');
 }
@@ -78,12 +80,14 @@ async function _fillMemberOptions() {
   const sel = document.getElementById('project-member-select');
   if (!sel) return;
   const users = await api('GET', '/admin/users', undefined, true);
-  // Ответственным можно назначить только пользователя с ролью «Исполнитель»
+  // Ответственным можно назначить только пользователя с ролью «Исполнитель»;
+  // руководителя этого же проекта — нельзя (роль в проекте одна).
   const eligible = (users || []).filter(u => u.is_active && u.role === 'USER');
 
   sel.innerHTML = '<option value="">Добавить исполнителя…</option>' +
     eligible
       .filter(u => !selectedMembers.some(m => String(m.user_id) === String(u.user_id)))
+      .filter(u => !selectedManagers.some(m => String(m.user_id) === String(u.user_id)))
       .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
       .join('');
 }
@@ -92,12 +96,17 @@ async function _fillManagerOptions() {
   const sel = document.getElementById('project-manager-select');
   if (!sel) return;
   const users = await api('GET', '/admin/users', undefined, true);
-  // Руководителем назначается только пользователь с ролью «Руководитель»
-  const eligible = (users || []).filter(u => u.is_active && u.role === 'PROJECT_MANAGER');
+  // Руководитель — назначение в проекте, а не роль: им можно сделать
+  // исполнителя или постановщика. Админ и так ведёт все проекты.
+  // Кто уже постановщик или ответственный здесь — не предлагаем.
+  const eligible = (users || []).filter(u =>
+    u.is_active && (u.role === 'USER' || u.role === 'TEAM_LEAD'));
 
   sel.innerHTML = '<option value="">Добавить руководителя…</option>' +
     eligible
       .filter(u => !selectedManagers.some(m => String(m.user_id) === String(u.user_id)))
+      .filter(u => !selectedMembers.some(m => String(m.user_id) === String(u.user_id)))
+      .filter(u => !selectedOwners.some(o => String(o.user_id) === String(u.user_id)))
       .map(u => `<option value="${u.user_id}|${esc(u.username)}">${esc(u.username)}</option>`)
       .join('');
 }
@@ -109,12 +118,16 @@ function addProjectManager(value) {
   selectedManagers.push({ user_id: id, username });
   _renderManagerChips();
   _fillManagerOptions();
+  _fillMemberOptions();
+  _fillOwnerOptions();
 }
 
 function removeProjectManager(userId) {
   selectedManagers = selectedManagers.filter(m => String(m.user_id) !== String(userId));
   _renderManagerChips();
   _fillManagerOptions();
+  _fillMemberOptions();
+  _fillOwnerOptions();
 }
 
 function _renderManagerChips() {
@@ -136,12 +149,14 @@ function addProjectMember(value) {
   selectedMembers.push({ user_id: id, username });
   _renderMemberChips();
   _fillMemberOptions();
+  _fillManagerOptions();
 }
 
 function removeProjectMember(userId) {
   selectedMembers = selectedMembers.filter(m => String(m.user_id) !== String(userId));
   _renderMemberChips();
   _fillMemberOptions();
+  _fillManagerOptions();
 }
 
 function _renderMemberChips() {
@@ -166,12 +181,14 @@ function addProjectOwner(value) {
   selectedOwners.push({ user_id: id, username });
   _renderOwnerChips();
   _fillOwnerOptions();
+  _fillManagerOptions();
 }
 
 function removeProjectOwner(userId) {
   selectedOwners = selectedOwners.filter(o => String(o.user_id) !== String(userId));
   _renderOwnerChips();
   _fillOwnerOptions();
+  _fillManagerOptions();
 }
 
 function _renderOwnerChips() {

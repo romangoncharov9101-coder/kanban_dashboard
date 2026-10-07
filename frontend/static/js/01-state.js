@@ -80,15 +80,15 @@ function _complexityBadge(value) {
 }
 
 // Статус двигает тот, кто над задачей работает: админ, автор задачи
-// (постановщик или руководитель) и любой её исполнитель.
+// (постановщик, руководитель проекта, исполнитель-автор личной задачи)
+// и любой её исполнитель.
 // Это шире, чем право править саму задачу.
 function canChangeStatus(card) {
   if (!currentUser || !card) return false;
   if (isAdmin()) return true;
   const meId = String(currentUser.user_id);
   if ((card.assignees || []).some(a => String(a.user_id) === meId)) return true;
-  return (currentUser.role === 'TEAM_LEAD' || currentUser.role === 'PROJECT_MANAGER')
-    && String(card.created_by) === meId;
+  return String(card.created_by) === meId;
 }
 
 // Сложность меняют те же, кто двигает статус: админ, автор-постановщик

@@ -88,9 +88,9 @@ function isCardVisibleToMe(card) {
   const isAssignee = (card.assignees || []).some(a => String(a.user_id) === meId);
 
   // Исполнитель — только то, что назначено лично ему
-  if (currentUser.role !== 'TEAM_LEAD' && currentUser.role !== 'PROJECT_MANAGER') return isAssignee;
-
-  // Постановщик и руководитель — назначенное им плюс созданное ими самими
+  // Назначенное лично ему плюс созданное им самим — как и на сервере
+  // (include_own_created). У исполнителя это личные задачи, у руководителя
+  // проекта — поставленные им, у постановщика — его задачи.
   return isAssignee || String(card.created_by) === meId;
 }
 
@@ -153,4 +153,3 @@ function getCardFilter() {
     return true;
   }
 }
- 
