@@ -47,19 +47,19 @@ function _statusMeta(value) {
 // Сложность (трудоёмкость) задачи. Единственный источник подписей и
 // весов на фронте: из него строятся точки на карточке, кнопки в модалке
 // и сумма очков в шапке колонки. Пустое значение (null) = «не оценена».
-// cls — бейдж на карточке: один оттенок, насыщеннее с ростом сложности,
+// pts — только порядок для сортировки «По сложности», на экран не выводится.
+// hint — подсказка при наведении на кнопку в модалке и на бейдж карточки.
+// cls — бейдж на карточке: один оттенок, насыщеннее с ростом размера,
 // чтобы не спорить по цвету с приоритетом и статусом.
 const COMPLEXITY_META = {
-  TRIVIAL: { label: 'Элементарная', pts: 1, hint: 'до часа, решение очевидно',
-             cls: 'bg-white text-slate-500 border-slate-200' },
-  EASY:    { label: 'Простая',      pts: 2, hint: 'до дня, без неизвестных',
-             cls: 'bg-teal-50 text-teal-700 border-teal-200' },
-  MEDIUM:  { label: 'Средняя',      pts: 3, hint: 'несколько дней, подход понятен',
-             cls: 'bg-teal-100 text-teal-800 border-teal-300' },
-  HARD:    { label: 'Сложная',      pts: 5, hint: 'около недели, есть неизвестные',
-             cls: 'bg-teal-600 text-white border-teal-600' },
-  EXPERT:  { label: 'Экспертная',   pts: 8, hint: 'исследование и риски, лучше разбить на части',
-             cls: 'bg-teal-800 text-white border-teal-800' },
+  S:  { label: 'S',  pts: 1, hint: 'Небольшая правка, до нескольких часов',
+        cls: 'bg-teal-50 text-teal-700 border-teal-200' },
+  M:  { label: 'M',  pts: 2, hint: 'Стандартная задача на 1–2 дня',
+        cls: 'bg-teal-100 text-teal-800 border-teal-300' },
+  L:  { label: 'L',  pts: 3, hint: 'Сложная задача на 3–5 дней',
+        cls: 'bg-teal-600 text-white border-teal-600' },
+  XL: { label: 'XL', pts: 4, hint: 'Отдельный этап проекта, требует декомпозиции',
+        cls: 'bg-teal-800 text-white border-teal-800' },
 };
 
 function _complexityPoints(value) {
@@ -73,7 +73,7 @@ function _complexityBadge(value) {
   const m = COMPLEXITY_META[value];
   if (!m) return '';
   return `<span class="inline-flex items-center gap-0.5 w-fit px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${m.cls}"
-               title="Сложность: ${m.label}">🧩 ${m.label}</span>`;
+               title="Сложность ${m.label}: ${m.hint}">🧩 ${m.label}</span>`;
 }
 
 // Статус двигает тот, кто над задачей работает: админ, автор задачи
@@ -3468,11 +3468,11 @@ async function submitCard() {
     const priorityElement = document.querySelector('input[name="card-priority"]:checked');
     const priority = priorityElement ? priorityElement.value : 'LOW';
 
-    // Мягкое правило: экспертную задачу без описания сохранить можно,
+    // Мягкое правило: задачу размера XL без описания сохранить можно,
     // но стоит напомнить — исполнителю не от чего будет оттолкнуться.
     const complexity = _getComplexityRadio();
-    if (complexity === 'EXPERT' && !desc &&
-        !confirm('Задача экспертной сложности без описания. Сохранить всё равно?')) {
+    if (complexity === 'XL' && !desc &&
+        !confirm('Задача размера XL без описания. Сохранить всё равно?')) {
       return;
     }
 
@@ -4019,6 +4019,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       const { sort, filter } = JSON.parse(savedUI);
       currentSortMode = sort || 'position';
       currentFilterMode = filter || 'all';
+
+      // Сохранённое значение могло устареть (например, старые уровни
+      // сложности c-TRIVIAL…). Такого пункта в списке нет — сбрасываем,
+      // иначе доска окажется пустой без видимой причины.
+      const hasOption = (id, v) =>
+        !!document.querySelector(`#${id} option[value="${CSS.escape(v)}"]`);
+      if (!hasOption('filter-select', currentFilterMode)) currentFilterMode = 'all';
+      if (!hasOption('sort-select', currentSortMode)) currentSortMode = 'position';
       
       // Обе версии списка — десктопная и мобильная — должны показывать
       // восстановленное значение, иначе на телефоне будет «Все»,

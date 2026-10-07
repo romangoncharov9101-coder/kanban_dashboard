@@ -337,11 +337,10 @@
             <option value="p-medium">Средний</option>
             <option value="p-low">Низкий</option>
             <option disabled>─── По сложности ───</option>
-            <option value="c-TRIVIAL">Элементарная</option>
-            <option value="c-EASY">Простая</option>
-            <option value="c-MEDIUM">Средняя</option>
-            <option value="c-HARD">Сложная</option>
-            <option value="c-EXPERT">Экспертная</option>
+            <option value="c-S" title="Небольшая правка, до нескольких часов">S</option>
+            <option value="c-M" title="Стандартная задача на 1–2 дня">M</option>
+            <option value="c-L" title="Сложная задача на 3–5 дней">L</option>
+            <option value="c-XL" title="Отдельный этап проекта, требует декомпозиции">XL</option>
             <option value="c-NONE">Не оценена</option>
           </select>
         </div>
@@ -451,11 +450,10 @@
               <option value="p-medium">Средний</option>
               <option value="p-low">Низкий</option>
               <option disabled>─── Сложность ───</option>
-              <option value="c-TRIVIAL">Элементарная</option>
-              <option value="c-EASY">Простая</option>
-              <option value="c-MEDIUM">Средняя</option>
-              <option value="c-HARD">Сложная</option>
-              <option value="c-EXPERT">Экспертная</option>
+              <option value="c-S">S</option>
+              <option value="c-M">M</option>
+              <option value="c-L">L</option>
+              <option value="c-XL">XL</option>
               <option value="c-NONE">Не оценена</option>
             </select>
           </div>
@@ -804,7 +802,8 @@
 
         <!-- Сложность: кнопки строятся в scripts.js из COMPLEXITY_META -->
         <label class="block text-xs font-medium text-slate-500 mb-1 mt-4 uppercase tracking-wide">Сложность</label>
-        <div id="card-complexity-group" class="grid grid-cols-3 gap-1.5" onchange="onComplexityPicked()"></div>
+        <!-- «Не оценена» — по ширине текста, S/M/L/XL делят остальное поровну -->
+        <div id="card-complexity-group" class="grid grid-cols-[auto_repeat(4,minmax(0,1fr))] gap-1.5" onchange="onComplexityPicked()"></div>
         <p id="card-complexity-hint" class="text-[10px] text-slate-400 mt-1" style="display:none">
           Сложность сохраняется сразу при выборе
         </p>

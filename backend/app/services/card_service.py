@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import COMPLEXITY_POINTS, Attachment, Card, CardComplexity, CardStatus, User, UserRole
+from app.db.models import Attachment, Card, CardComplexity, CardStatus, User, UserRole
 from app.db.schemas import (
     CardComplexityUpdate, CardCreate, CardMoveRequest, CardOut, CardStatusUpdate, CardUpdate,
     CommentOut, EventType,
@@ -209,24 +209,15 @@ class CardService:
         except (ValueError, KeyError):
             return str(value)
 
-    COMPLEXITY_LABELS = {
-        CardComplexity.TRIVIAL: 'элементарная',
-        CardComplexity.EASY: 'простая',
-        CardComplexity.MEDIUM: 'средняя',
-        CardComplexity.HARD: 'сложная',
-        CardComplexity.EXPERT: 'экспертная',
-    }
-
-    @classmethod
-    def _complexity_label(cls, value) -> str:
-        """«сложная (5)» для журнала; None — «не оценена»."""
+    @staticmethod
+    def _complexity_label(value) -> str:
+        """Подпись для журнала: «M»; None — «не оценена»."""
         if value is None:
             return 'не оценена'
         try:
-            c = CardComplexity(value)
+            return CardComplexity(value).value
         except ValueError:
             return str(value)
-        return f'{cls.COMPLEXITY_LABELS[c]} ({COMPLEXITY_POINTS[c]})'
 
     #======================================================
     # Cards

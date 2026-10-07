@@ -136,11 +136,10 @@ class CardPriority(str, Enum):
 
 class CardComplexity(str, Enum):
     """Трудоёмкость задачи. None в схемах = «не оценена»."""
-    TRIVIAL = "TRIVIAL"
-    EASY = "EASY"
-    MEDIUM = "MEDIUM"
-    HARD = "HARD"
-    EXPERT = "EXPERT"
+    S = "S"
+    M = "M"
+    L = "L"
+    XL = "XL"
 
 
 class CardStatus(str, Enum):
