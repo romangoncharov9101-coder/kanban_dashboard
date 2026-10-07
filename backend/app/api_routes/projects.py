@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_admin
 from app.db.models import User
-from app.db.schemas import ProjectCreate, ProjectOut, ProjectUpdate
+from app.db.schemas import ProjectAssignableOut, ProjectCreate, ProjectOut, ProjectUpdate
 from app.db.session import get_db
 from app.services.project_service import ProjectService
 
@@ -20,6 +20,17 @@ async def list_projects(db: AsyncSession = Depends(get_db), current_user: User =
 @router.get('/{project_id}', response_model=ProjectOut)
 async def get_project(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     return await ProjectService(db).get_one(project_id, current_user)
+
+
+@router.get('/{project_id}/assignable', response_model=ProjectAssignableOut)
+async def get_assignable(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    Кого можно назначать исполнителем задач этого проекта.
+    Ограничение действует для руководителя проекта: только постановщики
+    и ответственные (а руководителю всего проекта — ещё и руководители
+    подпроектов).
+    """
+    return await ProjectService(db).get_assignable(project_id, current_user)
 
 
 @router.post('', response_model=ProjectOut, status_code=status.HTTP_201_CREATED)

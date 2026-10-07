@@ -29,10 +29,19 @@ class UserRole(str, enum.Enum):
                  созданные админом, ему не видны.
     USER       — исполнитель. Видит только назначенные ему задачи, двигает их
                  между разрешёнными категориями, комментирует, шлёт файлы.
+    PROJECT_MANAGER — руководитель. Сам по себе прав на проекты не имеет:
+                 админ назначает его руководителем конкретного проекта или
+                 подпроекта (ProjectRole.MANAGER). Там он создаёт колонки,
+                 заводит задачи в любых колонках и назначает исполнителями
+                 только постановщиков и ответственных этого проекта.
+                 Руководитель корневого проекта дополнительно может назначать
+                 исполнителями руководителей его подпроектов.
+                 Видимость задач — как у постановщика: свои и назначенные.
     """
     ADMIN = "ADMIN"
     TEAM_LEAD = "TEAM_LEAD"
     USER = "USER"
+    PROJECT_MANAGER = "PROJECT_MANAGER"
 
 
 #======================================================
@@ -71,11 +80,12 @@ class User(Base):
     @property
     def is_manager(self) -> bool:
         """
-        ADMIN или TEAM_LEAD — те, кто может создавать категории и задачи.
+        ADMIN, TEAM_LEAD или PROJECT_MANAGER — те, кто может создавать
+        категории и задачи (в каких именно проектах — решает ProjectService).
         Внимание: это НЕ право видеть или менять конкретную задачу —
         для этого есть CardService._can_view / _can_manage.
         """
-        return self.role in (UserRole.ADMIN, UserRole.TEAM_LEAD)
+        return self.role in (UserRole.ADMIN, UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER)
 
     def __repr__(self) -> str:
         return f'<User(username={self.username}, role={self.role})>'
@@ -368,6 +378,7 @@ class ProjectRole(str, enum.Enum):
     """Роль пользователя внутри конкретного проекта."""
     OWNER = "OWNER"      # постановщик, отвечающий за проект
     MEMBER = "MEMBER"    # ответственный исполнитель, работающий в проекте
+    MANAGER = "MANAGER"  # руководитель проекта (глобальная роль PROJECT_MANAGER)
 
 
 project_members = Table(
@@ -436,6 +447,19 @@ class Project(Base):
         primaryjoin=lambda: and_(
             Project.id == project_members.c.project_id,
             project_members.c.role_in_project == ProjectRole.MEMBER,
+        ),
+        secondaryjoin=lambda: User.user_id == project_members.c.user_id,
+        viewonly=True, lazy='selectin', order_by='User.username',
+    )
+
+    # Руководители: ведут доску проекта и назначают исполнителей
+    # из постановщиков и ответственных. Их может быть несколько.
+    managers: Mapped[list['User']] = relationship(
+        'User',
+        secondary=project_members,
+        primaryjoin=lambda: and_(
+            Project.id == project_members.c.project_id,
+            project_members.c.role_in_project == ProjectRole.MANAGER,
         ),
         secondaryjoin=lambda: User.user_id == project_members.c.user_id,
         viewonly=True, lazy='selectin', order_by='User.username',

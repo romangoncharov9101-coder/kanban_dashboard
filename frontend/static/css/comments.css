@@ -1,0 +1,32 @@
+/* Комментарии и выбор эмодзи. */
+/* ── Comments input ────────────────────────────────────────────── */
+.comment-item { border-bottom: 1px solid #f1f5f9; padding: 0.75rem 0; }
+.comment-item:last-child { border-bottom: none; }
+
+.emoji-picker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  padding: 8px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 8px;
+  z-index: 50;
+}
+.emoji-btn { padding: 4px; border-radius: 4px; transition: background 0.2s; }
+.emoji-btn:hover { background: #f1f5f9; }
+
+#comments-list {
+  scroll-behavior: smooth;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

@@ -16,8 +16,10 @@ class ProjectRepository:
         return select(Project).options(
             selectinload(Project.owners),
             selectinload(Project.members),
+            selectinload(Project.managers),
             selectinload(Project.children).selectinload(Project.owners),
             selectinload(Project.children).selectinload(Project.members),
+            selectinload(Project.children).selectinload(Project.managers),
         )
 
     async def get_by_id(self, project_id: uuid.UUID) -> Project | None:
@@ -97,6 +99,9 @@ class ProjectRepository:
     async def get_member_ids(self, project_id: uuid.UUID) -> list[uuid.UUID]:
         return await self.get_participant_ids(project_id, ProjectRole.MEMBER)
 
+    async def get_manager_ids(self, project_id: uuid.UUID) -> list[uuid.UUID]:
+        return await self.get_participant_ids(project_id, ProjectRole.MANAGER)
+
     async def set_participants(
         self, project: Project, user_ids: list[uuid.UUID], role: ProjectRole
     ) -> None:
@@ -136,13 +141,16 @@ class ProjectRepository:
         await self.session.flush()
         if to_remove or to_add:
             # Связь меняется core-запросами, ORM об этом не знает.
-            self.session.expire(project, ['owners', 'members'])
+            self.session.expire(project, ['owners', 'members', 'managers'])
 
     async def set_owners(self, project: Project, user_ids: list[uuid.UUID]) -> None:
         await self.set_participants(project, user_ids, ProjectRole.OWNER)
 
     async def set_members(self, project: Project, user_ids: list[uuid.UUID]) -> None:
         await self.set_participants(project, user_ids, ProjectRole.MEMBER)
+
+    async def set_managers(self, project: Project, user_ids: list[uuid.UUID]) -> None:
+        await self.set_participants(project, user_ids, ProjectRole.MANAGER)
 
     async def get_project_ids_by_role(
         self, user_id: uuid.UUID, role: ProjectRole
@@ -162,6 +170,10 @@ class ProjectRepository:
     async def get_member_project_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
         """Проекты, где пользователь — ответственный исполнитель."""
         return await self.get_project_ids_by_role(user_id, ProjectRole.MEMBER)
+
+    async def get_managed_project_ids(self, user_id: uuid.UUID) -> list[uuid.UUID]:
+        """Проекты, где пользователь — руководитель."""
+        return await self.get_project_ids_by_role(user_id, ProjectRole.MANAGER)
 
     async def get_project_ids_with_assignments(self, user_id: uuid.UUID) -> list[uuid.UUID]:
         """Проекты, где у пользователя есть хотя бы одна назначенная задача."""
@@ -229,7 +241,7 @@ class ProjectRepository:
                 card_assignees.c.user_id == viewer.user_id
             )
             cond = Card.id.in_(assigned)
-            if viewer.role is UserRole.TEAM_LEAD:
+            if viewer.role in (UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER):
                 cond = or_(cond, Card.created_by == viewer.user_id)
             q = q.where(cond)
 

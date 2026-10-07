@@ -9,7 +9,9 @@ from app.core.logging import get_logger
 logger = get_logger('wbsocket.manager')
 
 # Роли, которые видят всю доску целиком.
-PRIVILEGED_ROLES = {'ADMIN', 'TEAM_LEAD'}
+# Руководитель получает карточные события так же, как постановщик:
+# клиент сам отбрасывает то, что ему не положено видеть.
+PRIVILEGED_ROLES = {'ADMIN', 'TEAM_LEAD', 'PROJECT_MANAGER'}
 
 
 @dataclass

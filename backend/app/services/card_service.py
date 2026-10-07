@@ -94,7 +94,8 @@ class CardService:
             return True
         if card.is_assignee(user.user_id):
             return True
-        return user.role is UserRole.TEAM_LEAD and str(card.created_by) == str(user.user_id)
+        return (user.role in (UserRole.TEAM_LEAD, UserRole.PROJECT_MANAGER)
+                and str(card.created_by) == str(user.user_id))
 
     def _assert_can_view(self, card: Card, user: User) -> None:
         if not self._can_view(card, user):
@@ -175,6 +176,34 @@ class CardService:
                 detail=f'Нельзя назначить деактивированного пользователя: {", ".join(inactive)}',
             )
         return users
+
+    async def _assert_assignable(
+        self, project_id: uuid.UUID, actor: User, user_ids: set[uuid.UUID]
+    ) -> None:
+        """
+        Руководитель назначает исполнителями только постановщиков и
+        ответственных проекта (руководитель всего проекта — ещё и
+        руководителей подпроектов). Для остальных ролей ограничений нет.
+        """
+        if actor.role is not UserRole.PROJECT_MANAGER or not user_ids:
+            return
+        from app.services.project_service import ProjectService
+        project_service = ProjectService(self.session)
+        project = await self.project_repo.get_by_id(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail='Проект не найден.')
+        allowed = await project_service.assignable_user_ids(project, actor)
+        if allowed is None:
+            return
+        foreign = set(user_ids) - allowed
+        if foreign:
+            users = await self.user_repo.get_users_by_ids(list(foreign))
+            names = ', '.join(sorted(u.username for u in users)) or ', '.join(str(i) for i in foreign)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=('Руководитель может назначать исполнителями только постановщиков '
+                        f'и ответственных проекта. Нельзя назначить: {names}'),
+            )
 
     async def _notify_assignees(self, card: Card, user_ids: set[uuid.UUID], actor: User) -> None:
         for uid in user_ids:
@@ -319,6 +348,7 @@ class CardService:
             requested_ids = [author.user_id]
 
         assignees = await self._resolve_assignees(requested_ids)
+        await self._assert_assignable(col.project_id, author, {u.user_id for u in assignees})
 
         max_pos = await self.repo.get_max_position_in_column(data.column_id)
         card = await self.repo.create(
@@ -428,6 +458,11 @@ class CardService:
             if requested != old_assignee_ids:
                 users = await self._resolve_assignees(data.assignee_ids)
                 new_assignee_ids = {u.user_id for u in users}
+                # Проверяем только добавленных: снять уже назначенного
+                # руководитель может всегда, даже если тот выбыл из проекта.
+                await self._assert_assignable(
+                    card.project_id, actor, new_assignee_ids - old_assignee_ids
+                )
                 assignees_changed = True
                 if users:
                     log_details.append(f"исполнители → {', '.join(u.username for u in users)}")

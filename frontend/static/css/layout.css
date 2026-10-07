@@ -1,0 +1,16 @@
+/* Скролл, адаптивная доска, touch-action. */
+/* ── Scrollbar thin ─────────────────────────────────────────────── */
+.thin-scroll::-webkit-scrollbar { width:4px; }
+.thin-scroll::-webkit-scrollbar-track { background:transparent; }
+.thin-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+
+/* ── Responsive board ────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  #board { flex-direction:column; align-items:stretch; overflow-x:visible; }
+  #board > div { min-width:unset !important; max-width:unset !important; }
+  main { padding:0.75rem; }
+}
+
+/* touch-action: none на draggable-элементах чтобы браузер не перехватывал touch */
+.card { touch-action: none; }
+.col-handle { touch-action: none; }

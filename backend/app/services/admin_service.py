@@ -12,6 +12,13 @@ from app.repositories.user_repo import UserRepository
 
 logger = get_logger('service.admin')
 
+ROLE_LABELS = {
+    'ADMIN': 'администратор',
+    'TEAM_LEAD': 'постановщик',
+    'USER': 'исполнитель',
+    'PROJECT_MANAGER': 'руководитель',
+}
+
 class AdminService:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -37,8 +44,7 @@ class AdminService:
             role=UserRole(data.role.value),
             created_by=actor.user_id,
         )
-        role_label = {'ADMIN': 'администратор', 'TEAM_LEAD': 'постановщик',
-                      'USER': 'исполнитель'}.get(user.role.value, user.role.value)
+        role_label = ROLE_LABELS.get(user.role.value, user.role.value)
         await self.event_repo.create(
             event_type=EventType.USER_CREATED,
             message=f'Создал пользователя «{user.username}» с ролью «{role_label}»',
@@ -82,7 +88,7 @@ class AdminService:
             await self.session_repo.delete_for_user(user.user_id)
             await self.repo.set_online(user, False)
 
-        labels = {'ADMIN': 'администратор', 'TEAM_LEAD': 'постановщик', 'USER': 'исполнитель'}
+        labels = ROLE_LABELS
         changes = []
         if 'password_hash' in updates:
             changes.append('сменил пароль')
@@ -128,4 +134,3 @@ class AdminService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail='Это последний администратор - операция заблокирована.'
             )
-        

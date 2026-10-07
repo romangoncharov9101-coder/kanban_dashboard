@@ -1,0 +1,13 @@
+/* Режим архива доски. */
+/* Отключаем визуальный указатель возможности перетаскивания в архиве */
+#board.archive-mode .column {
+    cursor: default !important;
+}
+
+#board.archive-mode .col-handle {
+    cursor: default !important;
+}
+
+#board.archive-mode .card-item {
+    cursor: default !important;
+}

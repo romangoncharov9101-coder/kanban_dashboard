@@ -14,7 +14,10 @@ logger = get_logger('services.column')
 
 
 class ColumnService:
-    """Категории доски. Создавать и менять их может только ADMIN/TEAM_LEAD."""
+    """
+    Категории доски. Создают и меняют их админ, а также постановщик
+    и руководитель — в тех проектах, которые они ведут.
+    """
 
     def __init__(self, session: AsyncSession):
         self.session = session

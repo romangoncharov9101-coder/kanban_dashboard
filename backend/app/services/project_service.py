@@ -23,6 +23,9 @@ class ProjectService:
       ADMIN     — всё дерево.
       TEAM_LEAD — проекты, где он ответственный, вместе с подпроектами,
                   плюс те, где у него есть свои задачи или назначения.
+      PROJECT_MANAGER — проекты, где он руководитель, вместе с подпроектами
+                  (если руководит корневым), плюс те, где у него есть свои
+                  задачи или назначения.
       USER      — только проекты, где ему назначена хотя бы одна задача.
     """
 
@@ -48,6 +51,13 @@ class ProjectService:
             ids.update(owned)
             # Ответственный за корневой проект отвечает и за его подпроекты.
             for pid in list(owned):
+                ids.update(await self.repo.get_children_ids(pid))
+
+        if viewer.role is UserRole.PROJECT_MANAGER:
+            managed = await self.repo.get_managed_project_ids(viewer.user_id)
+            ids.update(managed)
+            # Руководитель всего проекта руководит и его подпроектами.
+            for pid in list(managed):
                 ids.update(await self.repo.get_children_ids(pid))
         # Ответственный исполнитель видит проект целиком, даже пока
         # ему не назначили ни одной задачи.
@@ -83,13 +93,72 @@ class ProjectService:
         """
         if user.role is UserRole.ADMIN:
             return True
-        if user.role is not UserRole.TEAM_LEAD:
+        if user.role is UserRole.TEAM_LEAD:
+            owned = set(await self.repo.get_owned_project_ids(user.user_id))
+        elif user.role is UserRole.PROJECT_MANAGER:
+            # Руководитель ведёт доску там, где назначен, а руководитель
+            # корневого проекта — ещё и доски всех его подпроектов.
+            owned = set(await self.repo.get_managed_project_ids(user.user_id))
+        else:
             return False
 
-        owned = set(await self.repo.get_owned_project_ids(user.user_id))
         if project.id in owned:
             return True
         return project.parent_id is not None and project.parent_id in owned
+
+    async def manages_whole_project(self, project: Project, user: User) -> bool:
+        """
+        Руководитель корневого проекта, в который входит этот узел.
+        Только такой руководитель может назначать исполнителями
+        руководителей подпроектов.
+        """
+        if user.role is not UserRole.PROJECT_MANAGER:
+            return False
+        root_id = project.parent_id or project.id
+        return root_id in set(await self.repo.get_managed_project_ids(user.user_id))
+
+    async def assignable_user_ids(self, project: Project, actor: User) -> set[uuid.UUID] | None:
+        """
+        Кого актёр вправе назначать исполнителем задачи в этом проекте.
+        None — ограничений нет (админ и постановщик работают как раньше).
+
+        Руководитель назначает только постановщиков и ответственных того
+        узла, где лежит задача (постановщики корня действуют и в подпроектах). Руководитель всего проекта дополнительно
+        может назначать руководителей подпроектов: на доске корня — любого
+        из подпроектов, на доске подпроекта — руководителей этого подпроекта.
+        """
+        if actor.role is not UserRole.PROJECT_MANAGER:
+            return None
+
+        ids: set[uuid.UUID] = set(await self.repo.get_owner_ids(project.id))
+        ids.update(await self.repo.get_member_ids(project.id))
+        # Постановщик корневого проекта ведёт и все его подпроекты,
+        # поэтому в подпроекте он тоже считается постановщиком.
+        # Ответственные же не наследуются (см. is_project_member).
+        if project.parent_id:
+            ids.update(await self.repo.get_owner_ids(project.parent_id))
+
+        if await self.manages_whole_project(project, actor):
+            if project.is_root:
+                for child in project.children or []:
+                    if not child.is_archived:
+                        ids.update(await self.repo.get_manager_ids(child.id))
+            else:
+                ids.update(await self.repo.get_manager_ids(project.id))
+        return ids
+
+    async def get_assignable(self, project_id: uuid.UUID, actor: User) -> dict:
+        """
+        Для клиента: ограничен ли выбор исполнителей и кем именно.
+        Деактивированных не отдаём — назначить их всё равно нельзя.
+        """
+        project = await self.assert_can_view(project_id, actor)
+        ids = await self.assignable_user_ids(project, actor)
+        if ids is None:
+            return {'restricted': False, 'users': []}
+        users = await self.user_repo.get_users_by_ids(list(ids)) if ids else []
+        users = sorted((u for u in users if u.is_active), key=lambda u: u.username.lower())
+        return {'restricted': True, 'users': users}
 
     async def is_project_member(self, project: Project, user: User) -> bool:
         """
@@ -162,6 +231,7 @@ class ProjectService:
             is_archived=project.is_archived,
             owners=[{'user_id': u.user_id, 'username': u.username} for u in project.owners],
             members=[{'user_id': u.user_id, 'username': u.username} for u in project.members],
+            managers=[{'user_id': u.user_id, 'username': u.username} for u in project.managers],
             children=children or [],
             can_manage=can_manage,
             open_tasks=open_tasks,
@@ -237,6 +307,7 @@ class ProjectService:
 
         owners = await self._resolve_owners(data.owner_ids)
         members = await self._resolve_members(data.member_ids)
+        managers = await self._resolve_managers(data.manager_ids)
 
         position = await self.repo.get_max_position(data.parent_id) + 1
         project = await self.repo.create(
@@ -251,17 +322,21 @@ class ProjectService:
             await self.repo.set_owners(project, [u.user_id for u in owners])
         if members:
             await self.repo.set_members(project, [u.user_id for u in members])
-        if owners or members:
+        if managers:
+            await self.repo.set_managers(project, [u.user_id for u in managers])
+        if owners or members or managers:
             project = await self.repo.get_by_id(project.id)
 
         out = self._node(project, can_manage=True)
         kind = 'подпроект' if parent else 'проект'
         where = f' в проекте «{parent.name}»' if parent else ''
         who = ', '.join(u.username for u in owners)
+        heads = ', '.join(u.username for u in managers)
         await self.event_repo.create(
             event_type=EventType.PROJECT_CREATED,
             message=f'Создал {kind} «{project.name}»{where}'
-                    + (f'; ответственные: {who}' if who else ''),
+                    + (f'; ответственные: {who}' if who else '')
+                    + (f'; руководители: {heads}' if heads else ''),
             actor=actor,
             project_id=project.id,
             project_name=project.name,
@@ -298,6 +373,11 @@ class ProjectService:
             await self.repo.set_members(project, [u.user_id for u in members])
             owners_changed = True
 
+        if data.manager_ids is not None:
+            managers = await self._resolve_managers(data.manager_ids)
+            await self.repo.set_managers(project, [u.user_id for u in managers])
+            owners_changed = True
+
         if updates:
             project = await self.repo.update(project, **updates)
         elif owners_changed:
@@ -316,7 +396,8 @@ class ProjectService:
         if owners_changed:
             leads = ', '.join(u.username for u in project.owners) or 'никого'
             execs = ', '.join(u.username for u in project.members) or 'никого'
-            changes.append(f'постановщики: {leads}; ответственные: {execs}')
+            heads = ', '.join(u.username for u in project.managers) or 'никого'
+            changes.append(f'постановщики: {leads}; ответственные: {execs}; руководители: {heads}')
 
         await self.event_repo.create(
             event_type=EventType.PROJECT_UPDATED,
@@ -377,6 +458,30 @@ class ProjectService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f'Ответственным можно назначить только исполнителя: {", ".join(bad)}',
+            )
+        inactive = [u.username for u in users if not u.is_active]
+        if inactive:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f'Пользователь деактивирован: {", ".join(inactive)}',
+            )
+        return users
+
+    async def _resolve_managers(self, manager_ids: list[uuid.UUID]) -> list[User]:
+        """Руководителем проекта можно назначить только роль «Руководитель»."""
+        if not manager_ids:
+            return []
+        users = await self.user_repo.get_users_by_ids(manager_ids)
+        found = {u.user_id for u in users}
+        missing = [str(i) for i in manager_ids if i not in found]
+        if missing:
+            raise HTTPException(status_code=404, detail=f'Пользователь не найден: {", ".join(missing)}')
+
+        bad = [u.username for u in users if u.role is not UserRole.PROJECT_MANAGER]
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f'Руководителем можно назначить только пользователя с ролью «Руководитель»: {", ".join(bad)}',
             )
         inactive = [u.username for u in users if not u.is_active]
         if inactive:

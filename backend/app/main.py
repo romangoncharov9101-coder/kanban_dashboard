@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -91,16 +92,39 @@ frontend_path = os.path.join(root_dir, "frontend")
 
 print(f"DEBUG: Looking for frontend at: {frontend_path}")
 
-SCRIPTS_JS_PATH = os.path.join(frontend_path, "static", "scripts.js")
 INDEX_HTML_PATH = os.path.join(frontend_path, "index.html")
+STATIC_DIR = os.path.join(frontend_path, "static")
 
-SCRIPT_TAG_PATTERN = 'src="./static/scripts.js?v='
+# Все локальные ресурсы подключаются в index.html как ./static/<путь>?v=<что угодно>.
+# Статика отдаётся с immutable-кешем на год, поэтому версия в URL обязана
+# меняться вместе с содержимым файла — иначе браузер не увидит деплой.
+STATIC_REF_PATTERN = re.compile(r'(?P<attr>src|href)="\./static/(?P<path>[^"?]+)\?v=[^"]*"')
 
 
 def file_hash(path: str, length: int = 8) -> str:
     """Короткий md5-хэш содержимого файла — используется как cache-busting версия в URL."""
     with open(path, "rb") as f:
         return hashlib.md5(f.read()).hexdigest()[:length]
+
+
+def _version_static_refs(html: str) -> str:
+    """Проставляет каждому ./static/...?v= хэш его собственного содержимого."""
+    found = 0
+
+    def repl(m: re.Match) -> str:
+        nonlocal found
+        rel = m.group('path')
+        full = os.path.normpath(os.path.join(STATIC_DIR, rel))
+        if not full.startswith(STATIC_DIR + os.sep) or not os.path.isfile(full):
+            logger.warning("index.html ссылается на отсутствующий файл: static/%s", rel)
+            return m.group(0)
+        found += 1
+        return f'{m.group("attr")}="./static/{rel}?v={file_hash(full)}"'
+
+    html = STATIC_REF_PATTERN.sub(repl, html)
+    if not found:
+        logger.warning("В index.html не найдено ни одного ./static/...?v= — версии не подставлены")
+    return html
 
 
 class MyStaticFiles(StaticFiles):
@@ -118,17 +142,8 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.get("/")
 async def get_index():
-    scripts_version = file_hash(SCRIPTS_JS_PATH)
-
     with open(INDEX_HTML_PATH, encoding="utf-8") as f:
-        html = f.read()
-
-    prefix, _, rest = html.partition(SCRIPT_TAG_PATTERN)
-    if rest:
-        _, _, tail = rest.partition('"')
-        html = f'{prefix}{SCRIPT_TAG_PATTERN}{scripts_version}"{tail}'
-    else:
-        logger.warning("Не найден тег scripts.js в index.html — версия не подставлена")
+        html = _version_static_refs(f.read())
 
     response = HTMLResponse(html)
     response.headers["Cache-Control"] = "no-store, must-revalidate"

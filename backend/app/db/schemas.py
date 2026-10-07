@@ -10,6 +10,7 @@ class UserRole(str, Enum):
     ADMIN = "ADMIN"
     TEAM_LEAD = "TEAM_LEAD"
     USER = "USER"
+    PROJECT_MANAGER = "PROJECT_MANAGER"
 
 
 # Управляющие и невидимые символы в названиях недопустимы — они ломают
@@ -298,6 +299,7 @@ class CardHistoryOut(BaseModel):
 class ProjectRole(str, Enum):
     OWNER = "OWNER"
     MEMBER = "MEMBER"
+    MANAGER = "MANAGER"
 
 
 class ProjectCreate(BaseModel):
@@ -308,6 +310,8 @@ class ProjectCreate(BaseModel):
     owner_ids: list[UUID] = Field(default_factory=list, max_length=20)
     # Ответственные исполнители проекта
     member_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    # Руководители проекта (роль пользователя PROJECT_MANAGER)
+    manager_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
     @field_validator('name')
     @classmethod
@@ -328,6 +332,7 @@ class ProjectUpdate(BaseModel):
     is_archived: bool | None = None
     owner_ids: list[UUID] | None = Field(None, max_length=20)
     member_ids: list[UUID] | None = Field(None, max_length=50)
+    manager_ids: list[UUID] | None = Field(None, max_length=20)
 
 
 class ProjectOut(BaseModel):
@@ -339,6 +344,7 @@ class ProjectOut(BaseModel):
     is_archived: bool
     owners: list[UserShortOut] = []
     members: list[UserShortOut] = []
+    managers: list[UserShortOut] = []
     children: list['ProjectOut'] = []
     # Заполняется сервисом под конкретного зрителя
     can_manage: bool = False
@@ -410,6 +416,15 @@ class UserOut(BaseModel):
     is_active: bool
 
     model_config = {'from_attributes': True}
+
+
+class ProjectAssignableOut(BaseModel):
+    """
+    Кого текущий пользователь может назначать исполнителями в проекте.
+    restricted=False — ограничений нет (админ, постановщик), users пуст.
+    """
+    restricted: bool
+    users: list[UserOut] = []
 
 
 class UserLoginResponse(BaseModel):
